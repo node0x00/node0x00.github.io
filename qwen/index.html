@@ -1,0 +1,1081 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Project Qwen</title>
+<meta name="description" content="Design and build of Project Qwen, an offline home-security and assistant robot on salvaged hoverboard motors: voice, vision, security mode, closed-loop drive, AprilTag docking and automatic recharging.">
+<meta name="author" content="Hugo Richmond">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+<link rel="stylesheet" href="../assets/style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false}]})"></script>
+</head>
+<body>
+<header class="site-head">
+  <a class="name" href="../">Hugo Richmond</a>
+  <nav aria-label="Site">
+    <a href="../">Projects</a>
+    <a href="./" aria-current="page">Project Qwen</a>
+    <a href="https://github.com/node0x00/project-qwen" id="repo-link">Source code</a>
+  </nav>
+</header>
+
+<div class="paper">
+<main class="article" id="top">
+
+  <div class="title-block">
+    <span class="eyebrow">Design report</span>
+    <h1>Project Qwen</h1>
+    <p class="sub">An offline home-security and assistant robot, built on salvaged hoverboard motors, that sees, listens,
+       guards the house and docks itself to recharge.</p>
+    <div class="byline">
+      <span><strong>Hugo Richmond</strong> &middot; Computer Engineering</span>
+      <span>July 7 &ndash; October 17, 2026</span>
+    </div>
+    <figure>
+      <div class="media" data-media="hero-robot" data-kind="photo"></div>
+      <figcaption><b>Qwen in front of its docking tags.</b> Black-and-white PETG body designed in Fusion 360; the camera head
+        rides on a servo-driven scissor lift. The two printed AprilTags on the wall are how it finds its charger.</figcaption>
+    </figure>
+    <div class="abstract">
+      <span class="eyebrow">Abstract</span>
+      <p>Qwen is a home robot I designed and built from scratch over about three months. A Raspberry Pi 4 (4 GB) runs
+        everything that needs intelligence, all offline: a custom wake word, speech recognition, a local language model,
+        text-to-speech, hand-gesture control, owner face recognition and person detection. An ESP32 handles everything
+        that needs real-time timing: closed-loop wheel speed control on salvaged hoverboard hub motors, obstacle reflexes,
+        the scissor-lift servos and status LEDs. In security mode the robot sleeps on a motion sensor, wakes to check faces,
+        warns and records intruders, sounds an alarm and sends alerts to my phone. It returns to its charger by itself:
+        it finds two AprilTags on the wall, lines up on wheel odometry, turns around and reverses onto spring contacts,
+        and confirms the dock by measuring charging current. If it can't see the tags, it falls back to monocular
+        ORB-SLAM to search the room. This report covers the design, the math, what failed and how each problem was solved.</p>
+    </div>
+    <div class="facts">
+      <div><b>100% offline</b><span>speech, LLM and vision on the Pi</span></div>
+      <div><b>2 processors</b><span>Pi 4 (AI) + ESP32 (real time)</span></div>
+      <div><b>25.2 V</b><span>salvaged 7S hoverboard pack</span></div>
+      <div><b>8.5 mm / count</b><span>wheel odometry from hall taps</span></div>
+      <div><b>&lt; $70</b><span>out of pocket for the major parts</span></div>
+    </div>
+  </div>
+
+  <!-- 1 -->
+  <section id="goals">
+    <span class="secnum">01</span>
+    <h2>Goals and constraints</h2>
+    <p>I wanted a robot that is actually useful around the house rather than a demo: something I can talk to, that
+      keeps an eye on the place while I'm out, and that looks after its own battery. I organized the plan as a feature checklist
+      and kept it honest as the project went, so the final status of every item is in <a href="#status">section 15</a>.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Area</th><th>Planned features</th></tr></thead>
+      <tbody>
+        <tr><td>AI interaction</td><td>Local LLM, wake word ("Hey Qwen"), voice commands, spoken answers, owner face recognition, general Q&amp;A</td></tr>
+        <tr><td>Vision</td><td>Video and photos, hand gestures, face recognition, object and person detection</td></tr>
+        <tr><td>Security</td><td>Motion detection, unknown-face response, recording, alarm, flashlight, phone alerts</td></tr>
+        <tr><td>Navigation</td><td>Obstacle avoidance, return to dock, automatic recharging, room mapping</td></tr>
+        <tr><td>Personality</td><td>Idle animations, smooth "neck" motion on the scissor lift</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Constraints that drove every decision:</strong></p>
+    <ul>
+      <li><strong>Compute.</strong> A Raspberry Pi 4 with 4 GB of RAM and no GPU. RAM, not storage, was the binding limit.</li>
+      <li><strong>Power.</strong> A salvaged hoverboard Li-ion pack, 25.2 V nominal (7 cells in series). The robot should live
+        on it for long stretches and recharge itself.</li>
+      <li><strong>Offline.</strong> No cloud services for speech, language or vision. Only alerts leave the house.</li>
+      <li><strong>Budget.</strong> Mostly salvaged and second-hand parts (<a href="#bom">section 17</a>).</li>
+    </ul>
+    <p><strong>Guiding principle:</strong> only cheap processes run all the time, and heavy work happens on demand. That rule
+      decided the wake-word design, the security power states, the idle mode and how the camera is shared.</p>
+    <p><strong>Board split.</strong> The Pi does perception and decisions; the ESP32 does anything with a deadline. Safety
+      reflexes such as obstacle stops and the motor watchdog live on the ESP32, so they never depend on a round trip to the Pi.</p>
+  </section>
+
+  <!-- 2 -->
+  <section id="build">
+    <span class="secnum">02</span>
+    <h2>Design and build timeline</h2>
+    <p>Qwen is an original design. I started with hand sketches of the body and head, modeled them in Fusion 360 and
+      printed every part in PETG. The one borrowed mechanism is the scissor lift, which I adapted from a design on
+      Thingiverse.</p>
+    <div class="fig-row">
+      <figure><div class="media tall" data-media="sketch-original" data-kind="photo" data-text="Original hand sketch of Qwen"></div>
+        <figcaption><b>Concept sketch.</b> The hand-drawn starting point.</figcaption></figure>
+      <figure><div class="media tall" data-media="cad-fusion" data-kind="photo" data-text="Fusion 360 model of the body and head"></div>
+        <figcaption><b>Fusion 360 model</b> of the lower body and head.</figcaption></figure>
+    </div>
+    <ol class="timeline">
+      <li><span class="when">Month 1<br>Jul 7 &ndash;</span><p><strong>AI and vision first.</strong> Voice pipeline, custom
+        wake word, gestures and the camera layer, developed on my laptop with the same webcam. In parallel I started
+        reverse engineering the hoverboard's mainboard over UART, researched parts and bench-tested components one at a time.</p></li>
+      <li><span class="when">Month 2</span><p><strong>Mechanics.</strong> Tore down the hoverboard and wired the hub motors to
+        separate BLDC controllers (with several failures on the way, <a href="#drive">section 7</a>). Built the scissor lift,
+        which immediately ran into a weight limit: the servos could not raise the head with a stock webcam, so I stripped the
+        Logitech C920 out of its housing. Designed and printed the lower body and head, mounted the wheels and motors, and
+        laid out all the wiring on perfboard.</p></li>
+      <li><span class="when">Month 3<br>&ndash; Oct 17</span><p><strong>Integration.</strong> Security mode and the smart-home
+        link, soldering everything onto perfboards, wheel odometry, closed-loop speed control, docking, power management,
+        and merging every subsystem into one program that starts at boot.</p></li>
+    </ol>
+    <div class="fig-row">
+      <figure><div class="media" data-media="print-parts" data-kind="photo" data-text="Printed PETG parts before assembly"></div>
+        <figcaption><b>Printed parts</b> in PETG.</figcaption></figure>
+      <figure><div class="media" data-media="camera-stripped" data-kind="photo" data-text="The C920 board out of its housing to save weight"></div>
+        <figcaption><b>Weight cut.</b> The C920 without its shell, so the lift servos can raise the head.</figcaption></figure>
+    </div>
+    <figure><div class="media" data-media="scissor-lift-motion" data-kind="video" data-text="Scissor lift raising and lowering the head"></div>
+      <figcaption><b>The scissor lift</b> (two MG996R servos, 0&ndash;130&deg;), also usable by hand with a potentiometer on the front panel.</figcaption></figure>
+  </section>
+
+  <!-- 3 -->
+  <section id="architecture">
+    <span class="secnum">03</span>
+    <h2>System architecture</h2>
+    <p>Everything on the Pi runs in one Python process (<code>assistant.py</code>) started by a systemd service at boot and
+      restarted automatically if it crashes. One process means one owner for each shared resource: one camera manager,
+      one serial link to the ESP32, one web server. That turned out to matter more than any single algorithm
+      (<a href="#integration">section 13</a>). The only separate program is a small C++ tag tracker, which borrows the camera
+      while the robot drives itself.</p>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 820 480" role="img" aria-labelledby="arch-t">
+          <title id="arch-t">System architecture: software modules on the Raspberry Pi, real-time functions on the ESP32, joined by a UART link</title>
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a9aa3"/></marker>
+          </defs>
+          <rect class="bx-grp" x="16" y="30" width="478" height="390" rx="12"/>
+          <text x="32" y="54" class="t-b t-acc">Raspberry Pi 4 &middot; 4 GB</text>
+          <text x="210" y="54" class="t-s">one process, systemd service</text>
+          <g>
+            <rect class="bx bx-pi" x="32" y="70" width="214" height="54" rx="8"/><text x="44" y="92" class="t-b">Voice</text><text x="44" y="111" class="t-s">wake word &#8594; STT &#8594; LLM &#8594; TTS</text>
+            <rect class="bx bx-pi" x="264" y="70" width="214" height="54" rx="8"/><text x="276" y="92" class="t-b">Vision</text><text x="276" y="111" class="t-s">gestures &#183; faces &#183; YOLO26n</text>
+            <rect class="bx bx-pi" x="32" y="136" width="214" height="54" rx="8"/><text x="44" y="158" class="t-b">Security mode</text><text x="44" y="177" class="t-s">PIR &#183; face check &#183; alarm</text>
+            <rect class="bx bx-pi" x="264" y="136" width="214" height="54" rx="8"/><text x="276" y="158" class="t-b">Idle mode</text><text x="276" y="177" class="t-s">motion sensor wakes everything</text>
+            <rect class="bx bx-pi" x="32" y="202" width="214" height="54" rx="8"/><text x="44" y="224" class="t-b">Docking + driving</text><text x="44" y="243" class="t-s">AprilTags &#183; odometry &#183; teach view</text>
+            <rect class="bx bx-pi" x="264" y="202" width="214" height="54" rx="8"/><text x="276" y="224" class="t-b">Tag tracker (C++)</text><text x="276" y="243" class="t-s">AprilTag pose &#183; ORB-SLAM3</text>
+            <rect class="bx bx-pi" x="32" y="268" width="214" height="54" rx="8"/><text x="44" y="290" class="t-b">Power manager</text><text x="44" y="309" class="t-s">INA226 &#183; LEDs &#183; return to dock</text>
+            <rect class="bx bx-pi" x="264" y="268" width="214" height="54" rx="8"/><text x="276" y="290" class="t-b">Control page</text><text x="276" y="309" class="t-s">live view &#183; WASD &#183; dock steps</text>
+            <rect class="bx bx-pi" x="32" y="334" width="214" height="54" rx="8"/><text x="44" y="356" class="t-b">Alerts</text><text x="44" y="375" class="t-s">Telegram text, photos, video</text>
+            <rect class="bx bx-pi" x="264" y="334" width="214" height="54" rx="8"/><text x="276" y="356" class="t-b">Smart-home client</text><text x="276" y="375" class="t-s">lights &#183; door &#183; keypad</text>
+          </g>
+          <text x="20" y="448" class="t-s">Pi peripherals: C920 camera + mic (USB) &#183; MAX98357A speaker (I&#178;S) &#183; PIR (GPIO24) &#183; INA226 (I&#178;C) &#183; flashlight LED (GPIO23)</text>
+
+          <rect class="bx-grp" x="560" y="30" width="244" height="300" rx="12"/>
+          <text x="576" y="54" class="t-b t-blu">ESP32 &middot; firmware (C++)</text>
+          <rect class="bx bx-esp" x="576" y="70" width="212" height="54" rx="8"/><text x="588" y="92" class="t-b">Speed control</text><text x="588" y="111" class="t-s">feed-forward + PI, 50 Hz, 20 kHz PWM</text>
+          <rect class="bx bx-esp" x="576" y="136" width="212" height="54" rx="8"/><text x="588" y="158" class="t-b">Odometry</text><text x="588" y="177" class="t-s">4 hall taps, 60 counts / rev</text>
+          <rect class="bx bx-esp" x="576" y="202" width="212" height="54" rx="8"/><text x="588" y="224" class="t-b">Reflexes</text><text x="588" y="243" class="t-s">IR stop &#183; 500 ms motor watchdog</text>
+          <rect class="bx bx-esp" x="576" y="268" width="212" height="54" rx="8"/><text x="588" y="290" class="t-b">Lift + LEDs</text><text x="588" y="309" class="t-s">2&#215; MG996R &#183; battery + status LEDs</text>
+          <rect class="bx" x="560" y="356" width="244" height="64" rx="8"/>
+          <text x="574" y="380" class="t-b">Drive hardware</text>
+          <text x="574" y="400" class="t-s">2&#215; ZS-X11H &#8594; hub motors &#183; 3&#215; IR &#183; pot</text>
+          <path class="ln" d="M682 330 V356" marker-end="url(#ar)"/>
+
+          <path class="ln-acc" d="M494 210 H560" marker-end="url(#ar)" marker-start="url(#ar)"/>
+          <text x="500" y="196" class="t-s">UART</text>
+          <text x="500" y="232" class="t-s">115200</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 1. Architecture.</b> The Pi decides; the ESP32 acts. A plain-text serial protocol joins them
+        (for example <code>V 30 30</code> = both wheels 30 mm/s; the ESP32 reports wheel counts, speeds, IR states and lift position).</figcaption>
+    </figure>
+    <p><strong>Pi&ndash;ESP32 protocol rules</strong>, enforced on the ESP32:</p>
+    <ul>
+      <li>A 500 ms watchdog stops the motors if the Pi goes silent.</li>
+      <li>A blocked IR sensor stops forward motion without involving the Pi.</li>
+      <li>Reverse is limited by distance (450 mm measured by odometry), because the robot has no rear sensors.</li>
+      <li>The manual potentiometer takes over the lift only when it is physically turned.</li>
+    </ul>
+  </section>
+
+  <!-- 4 -->
+  <section id="voice">
+    <span class="secnum">04</span>
+    <h2>Voice assistant</h2>
+    <h3>First prototype, and why I replaced it</h3>
+    <p>The first pipeline avoided training a wake word: a voice-activity detector cut speech into utterances, Whisper
+      transcribed every one, and the text was fuzzy-matched against "hey qwen". It worked, but it ran speech recognition
+      almost continuously, which breaks the guiding principle on a board that also has to run vision. I replaced it
+      before it ever reached the Pi.</p>
+    <h3>Final pipeline</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Stage</th><th>Choice</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Wake word</td><td>openWakeWord, custom model</td><td>A tiny always-on classifier; everything heavier runs only after it fires</td></tr>
+        <tr><td>Speech to text</td><td>faster-whisper <code>tiny.en</code>, int8</td><td>Smallest model that understood me reliably on the Pi's CPU</td></tr>
+        <tr><td>Language model</td><td>Ollama, <code>qwen2.5:1.5b</code></td><td>Fits in RAM next to vision; kept resident for fast answers</td></tr>
+        <tr><td>Text to speech</td><td>Piper, <code>en_US-lessac-medium</code></td><td>Natural voice, runs locally</td></tr>
+        <tr><td>Command routing</td><td>Fuzzy intent matcher</td><td>Known commands skip the LLM entirely</td></tr>
+      </tbody>
+    </table></div>
+    <p>I originally set the LLM to unload after 3 idle minutes to free about 1 GB. On the robot the reload delay made the
+      first answer feel broken, and with everything running the Pi still had about 1.7 GB available (measured with
+      <code>free -m</code>), so it now stays loaded.</p>
+    <p>The speaker sits a few centimetres from the microphone, so the robot could wake itself. The microphone is muted
+      while it speaks plus a 0.3 s tail:</p>
+<pre><code>self.mic.mute_for(duration_s + MIC_MUTE_TAIL_S)   # tail = 0.3 s, so its own voice can't trigger "Hey Qwen"</code></pre>
+    <h3>Training the wake word</h3>
+    <p>I trained the wake word with openWakeWord's notebook, which generates synthetic speech so no recordings are needed.
+      Its text-to-speech read "Qwen" as the letter Q followed by "wen"; respelling the phrase <strong>"hey kwen"</strong>
+      fixed the pronunciation. A later <code>ImportError</code> came from a half-upgraded numpy/scipy pair and went away
+      with a clean runtime. The result is a 206 KB ONNX model with a detection threshold of 0.30 on the robot.</p>
+    <h3>Voice commands</h3>
+    <p>Start/stop recording, take a photo, flashlight on/off, look up/down (lift), turn, move forward/back,
+      "what do you see" (object detection read aloud), "is anyone here", "security mode" and "alarm". Anything else goes
+      to the language model. I checked the router offline against 13 phrasings, including commands buried in longer
+      sentences; all 13 routed correctly and the unrelated questions fell through to the LLM.</p>
+    <h3>Development-environment failures</h3>
+    <p>Most early failures were environment problems, each fixed one layer at a time: Linux setup steps run on macOS,
+      Python's protected system install (fixed with a virtual environment), <code>setuptools</code> 81 removing
+      <code>pkg_resources</code> (pinned below 81), a Piper API change, and a shell alias that pointed <code>python</code>
+      at a different interpreter than <code>pip</code>. On the Pi itself MediaPipe had no wheel for Python 3.13, so the
+      robot runs a separate Python 3.12 environment.</p>
+  </section>
+
+  <!-- 5 -->
+  <section id="vision">
+    <span class="secnum">05</span>
+    <h2>Vision: gestures, faces and objects</h2>
+    <h3>Hand gestures</h3>
+    <p>MediaPipe's hand landmarker returns 21 points per hand. Instead of training a gesture model, I classify gestures
+      with geometric rules on those points, which is cheap enough to run continuously at 12 fps. Every distance is divided
+      by the palm size (wrist to middle knuckle), so the rules don't depend on how far the hand is from the camera. A
+      gesture has to hold for 0.15 s, and there's a 2 s cooldown after each action.</p>
+    <p>Telling a fist from a thumbs-up took four iterations. A live overlay that drew the skeleton and printed the raw
+      metrics turned each one into a measurement instead of a guess:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Thumb rule</th><th>What went wrong</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Thumb tip farther from the wrist than the thumb base</td><td>Fist read as thumbs-up</td><td>A thumb tucked over curled fingers is still far from the wrist</td></tr>
+        <tr><td>2</td><td>Thumb tip &gt; 0.75 palm from the index knuckle</td><td>Open hand read as unknown</td><td>Measured 0.35 with the thumb alongside the palm: it measured spread, not straightness</td></tr>
+        <tr><td>3</td><td>Thumb straightness (cosine at the middle joint) &gt; 0.7</td><td>Fist still mostly thumbs-up</td><td>My fist keeps the thumb straight, laid across the fingers</td></tr>
+        <tr><td>4</td><td>Fingers curled <em>and</em> thumb tip above the folded fingertips</td><td>Works</td><td>Uses height, not shape; threshold tuned to 1.25 palm</td></tr>
+      </tbody>
+    </table></div>
+    <div class="eq">\[ r_{\text{thumb}} = \frac{\bar{y}_{\text{folded tips}} - y_{\text{thumb tip}}}{\lVert p_{\text{wrist}} - p_{\text{middle MCP}} \rVert} \;>\; 1.25 \quad\Rightarrow\quad \text{thumbs up} \]</div>
+    <p>Rather than keep tuning, I also changed the vocabulary so no two commands depend on that fist/thumbs-up boundary:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Gesture</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td>Thumbs up (not recording)</td><td>Start recording</td></tr>
+        <tr><td>OK sign (while recording)</td><td>Stop recording &mdash; thumb and index tips within 0.4 palm, other fingers extended</td></tr>
+        <tr><td>Peace sign</td><td>Photo after a 1.5 s delay</td></tr>
+        <tr><td>Rock sign, held 1 s</td><td>Toggle the flashlight</td></tr>
+      </tbody>
+    </table></div>
+    <figure><div class="media" data-media="gesture-debug" data-kind="video" data-text="Gesture debug overlay: skeleton plus live metrics"></div>
+      <figcaption><b>Gesture debug overlay.</b> Drawing the raw ratios on screen is what made the threshold tuning measurable.</figcaption></figure>
+    <p>Gestures need light; in the dark the hand isn't detected, so voice is the main way to switch the flashlight on.</p>
+
+    <h3>Owner face recognition</h3>
+    <p>Faces are found with YuNet and compared with SFace embeddings (both OpenCV models). There is one enrolled owner;
+      every other face is "unknown", and several faces are classified independently. A face counts as the owner when the
+      cosine similarity to the stored embedding is at least 0.363. Recognition turned out to depend on conditions (lift
+      height, room lights), so I enroll the owner once per condition and keep all the embeddings.</p>
+    <h3>Objects and people</h3>
+    <p>Object and person detection uses YOLO26n exported to NCNN, which runs well on the Pi's ARM cores: a 320-pixel model
+      for continuous person checks in security mode and a 640-pixel model when I ask "what do you see". A live debug view
+      in the browser draws faces, objects and hands on the camera feed.</p>
+    <figure><div class="media" data-media="face-recognition" data-kind="video" data-text="Owner vs unknown face labels on the live debug view"></div>
+      <figcaption><b>Face recognition on the live view:</b> owner and unknown faces labelled in real time.</figcaption></figure>
+  </section>
+
+  <!-- 6 -->
+  <section id="security">
+    <span class="secnum">06</span>
+    <h2>Security mode</h2>
+    <p>Security mode is a state machine built around power: the expensive parts only run when there is a reason to.</p>
+    <ul>
+      <li><strong>Arming.</strong> "Hey Qwen, security mode", or the exit button on my keypad. A 100 s exit delay lets me leave.</li>
+      <li><strong>Armed-idle.</strong> Camera, microphone, gestures and room lights off. Only the PIR motion sensor is watched.</li>
+      <li><strong>Armed-active.</strong> Motion turns on the room lights (through the smart-home hub) and the camera, and
+        starts face recognition plus person detection at 2 fps. Two minutes with no face or person returns to armed-idle,
+        treating the wake-up as a false trigger.</li>
+    </ul>
+    <h3>Intruder response</h3>
+    <p>An unknown face (seen for 1.5 s and at least 110 px wide, so tiny distant faces don't count) starts an incident: the
+      robot records video and says <em>"You are trespassing and being recorded, leave the premises immediately."</em> If
+      the intruder is still there after 25 s, a looping alarm starts (capped at 5 minutes). The intruder counts as present
+      while <em>either</em> an unknown face <em>or</em> a person shape is seen. In testing, tying it to the face alone ended
+      the incident whenever the person turned away, and the alarm never fired.</p>
+    <h3>Disarming and remote unlock</h3>
+    <p>Qwen plugs into my ESP32 smart-home system (door lock, keypad and light switches on an ESP-NOW hub, which is a
+      separate project). I designed two ways to disarm: the owner's face, or the correct keypad code. From the hub's web page
+      I can also unlock the door remotely for someone. That switches security mode on in <em>any</em> state, raises the lift
+      to 130&deg; so the camera can see faces from the floor, and gives 3 minutes to verify the owner's face or a keypad code
+      before the alarm sounds. Recognizing the owner cancels the keypad countdown and locks the door again.</p>
+    <p>Every step is reported on Telegram: motion photos, unknown-person photos, recordings, remote-unlock status. Media
+      files are deleted from the Pi once delivered.</p>
+    <div class="fig-row">
+      <figure><div class="media" data-media="security-unknown-face" data-kind="video" data-text="Unknown face: warning, recording, then alarm"></div>
+        <figcaption><b>Unknown-face response</b> in security mode.</figcaption></figure>
+      <figure><div class="media" data-media="telegram-alert" data-kind="photo" data-text="Telegram alert with photo on the phone"></div>
+        <figcaption><b>Phone alert</b> through a Telegram bot.</figcaption></figure>
+    </div>
+    <figure><div class="media" data-media="remote-unlock" data-kind="video" data-text="Remote unlock: lift rises, face verified, door relocks"></div>
+      <figcaption><b>Remote unlock.</b> The lift raises the camera, the owner is recognized and the door locks again.</figcaption></figure>
+  </section>
+
+  <!-- 7 -->
+  <section id="drive">
+    <span class="secnum">07</span>
+    <h2>Drivetrain: from hoverboard to closed-loop control</h2>
+    <p>I wanted to reuse the salvaged hoverboard's hub motors. My first plan was to keep its mainboard and command it from the ESP32.</p>
+    <h3>Identifying the controller</h3>
+    <p>I first tried to program the mainboard with an ST-Link over its SWD header. The usual STM32 tools kept failing to
+      recognize the chip, which made me look closer: it is a <strong>Linkosemi LKS32MC088C6T8</strong> (Cortex-M0), not an
+      STM32. The popular open-source hoverboard firmwares don't support it, and writing motor-control firmware for an
+      undocumented chip was out of scope.</p>
+    <figure><div class="media" data-media="hoverboard-mainboard" data-kind="photo" data-text="Hoverboard mainboard with the LKS32MC088 MCU"></div>
+      <figcaption><b>The hoverboard mainboard.</b> The MCU marking is what ruled out the STM32 toolchain.</figcaption></figure>
+    <h3>Reverse engineering the board-to-board link</h3>
+    <p>Next I tried leaving the stock firmware in place and speaking its protocol. I tapped the link between the two
+      boards (<code>12, R1, T1, G</code>, 3.3 V logic). While probing, a charged capacitor bank held 28 V with the battery
+      unplugged and caused a spark, so I discharge the bus before probing now. ESP32-based sniffing gave readable bytes,
+      but copying them from screenshots introduced errors (the letter O for zero), so I switched to a USB logic analyzer with PulseView.</p>
+    <div class="eq">\[ T_{\text{bit}} = 13\ \mu\text{s} \quad\Rightarrow\quad \text{baud} = \frac{1}{13\ \mu\text{s}} \approx 76\,923 \text{ bit/s (8N1)} \]</div>
+    <p>The capture showed fixed 19-byte frames: a constant idle frame (<code>55 00 00 &hellip; 34 D8</code>) and an
+      active frame (<code>55 CB FF &hellip;</code>) whose last bytes changed with the payload, consistent with a checksum
+      <strong>(hypothesis)</strong>. I generated C arrays straight from the decoder export and replayed them from the ESP32
+      into the right board, with the original wire cut to avoid bus contention.</p>
+    <figure><div class="media" data-media="logic-analyzer-capture" data-kind="photo" data-text="PulseView capture of the 19-byte frames"></div>
+      <figcaption><b>Logic-analyzer capture</b> of the inter-board link at about 76.9 kbaud.</figcaption></figure>
+    <div class="note fail"><span class="eyebrow">Negative result</span>
+      <p>With valid traffic replayed continuously, both boards stayed powered with no fault, but <strong>the wheels never
+        moved</strong> and the board still reacted to tilt. My interpretation <strong>(hypothesis)</strong>: the link carries
+        wheel-to-wheel telemetry, while the balance loop and motor commands are internal to each board. Proving it would
+        mean disassembling the stock firmware, so I chose to replace the controller instead.</p></div>
+    <h3>Replacement controllers (ZS-X11H)</h3>
+    <p>The first ZS-X11H locked the motor and vibrated; about 30 s into the stall it started smoking. That fits a
+      stalled-rotor current from a hall/phase mismatch <strong>(hypothesis)</strong>. Even on a 24 V, 5 A bench supply none of
+      the 36 hall-order combinations ran reliably. The root cause is still unknown. A second controller worked once I
+      bridged the pads that enable PWM input and wired its <code>P</code> pin.</p>
+    <p>An Arduino could drive it, but the ESP32 couldn't, because its 3.3 V logic high was below the controller's input
+      threshold. A bidirectional 3.3 V&ndash;5 V level shifter fixed it. Each motor now uses only two signals, DIR and PWM.</p>
+    <figure><div class="media" data-media="zs-x11h-wiring" data-kind="photo" data-text="ZS-X11H controller wired to a hub motor"></div>
+      <figcaption><b>ZS-X11H</b> wired to a hub motor: phases, hall sensors, DIR and PWM.</figcaption></figure>
+
+    <h3>Wheel odometry</h3>
+    <p>The robot needed to know how far each wheel had turned. The hub motors already contain hall sensors, so I tapped
+      two of them (A and B) on each motor controller's hall connector and fed them to the ESP32. The halls switch at 5 V and
+      the ESP32 tolerates 3.3 V, so each tap goes through a resistor divider made of three 10 k&Omega; resistors: one in
+      series, two in series to ground.</p>
+    <div class="eq">\[ V_{\text{GPIO}} = V_{\text{hall}}\,\frac{R_2}{R_1+R_2} = 5\ \text{V}\cdot\frac{20\ \text{k}\Omega}{10\ \text{k}\Omega + 20\ \text{k}\Omega} = 3.33\ \text{V}, \qquad I = \frac{5\ \text{V}}{30\ \text{k}\Omega} \approx 0.17\ \text{mA} \]</div>
+    <p>Each valid change in the two-bit hall state is one count with a known direction; jumps of two states (noise) count
+      as zero, so a glitch cancels out instead of drifting. I measured 60 counts per wheel revolution. With the 6.5-inch
+      (162 mm) wheels:</p>
+    <div class="eq">\[ C = \pi d = \pi \cdot 162\ \text{mm} \approx 509\ \text{mm}, \qquad k = \frac{C}{N} = \frac{509\ \text{mm}}{60} \approx 8.48\ \text{mm/count} \]</div>
+    <p>Driving measured distances on the floor gave <strong>k = 8.5 mm/count</strong>, matching the geometry. For a
+      differential drive with wheel spacing <em>b</em>, each update moves the robot by</p>
+    <div class="eq">\[ \Delta s = \frac{k(\Delta n_L + \Delta n_R)}{2}, \qquad \Delta\theta = \frac{k(\Delta n_R - \Delta n_L)}{b}, \qquad
+      \begin{aligned} x &\mathrel{+}= \Delta s\cos\!\left(\theta + \tfrac{\Delta\theta}{2}\right)\\ y &\mathrel{+}= \Delta s\sin\!\left(\theta + \tfrac{\Delta\theta}{2}\right)\end{aligned} \]</div>
+    <p>Turning in place on my wooden floor slips: a commanded 180&deg; turn on the measured spacing came out near
+      200&deg;. Calibrating against the camera gave an <em>effective</em> spacing of <strong>b = 365 mm</strong>. The
+      resolution is coarse, which shaped the docking design later:</p>
+    <div class="eq">\[ \Delta\theta_{\min} = \frac{k}{b} = \frac{8.5}{365}\ \text{rad} \approx 1.3^\circ \text{ per count of one wheel} \]</div>
+
+    <h3>Closed-loop speed control</h3>
+    <p>Open-loop PWM made "slow" mean different speeds at different battery voltages, and the two wheels never matched.
+      On the floor the robot also needed speeds well below what the controller can hold open-loop. So the ESP32 runs a
+      50 Hz speed loop per wheel. Speed comes from the time between hall counts, measured over two hall steps:</p>
+    <div class="eq">\[ \hat v = \frac{2k}{\Delta t_2}, \qquad u = K_{ff}\, v^{*} + K_p\, e + K_i \!\int e\,dt, \qquad e = v^{*} - \hat v \]</div>
+    <p>with \(K_{ff} = 0.025\), \(K_p = 0.008\) and \(K_i = 0.06\) (output in drive units per mm/s, integrator clamped). The
+      feed-forward term comes from measuring about 40 mm/s per drive unit with the wheels lifted. Two more terms made it
+      behave on the floor:</p>
+    <ul>
+      <li><strong>Acceleration limit</strong> of 200 mm/s&sup2;. Hard starts lifted the rear caster and slammed it down. The
+        Pi uses the same number to start braking early:
+        \( s_b = \dfrac{v^2}{2a} \), which is only 2.3 mm at 30 mm/s but 42 mm at 130 mm/s.</li>
+      <li><strong>Wheel sync</strong> for straight driving and spins: each wheel's target is corrected by
+        \( K_s\,(n_L - n_R) \) with \(K_s = 12\) mm/s per count, so one wheel can't run ahead.</li>
+    </ul>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 820 210" role="img" aria-labelledby="pid-t">
+          <title id="pid-t">Speed control loop for one wheel</title>
+          <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a9aa3"/></marker></defs>
+          <text x="14" y="76" class="t-b">v*</text><text x="14" y="94" class="t-s">from Pi (mm/s)</text>
+          <path class="ln" d="M40 70 H74" marker-end="url(#ar2)"/>
+          <rect class="bx bx-esp" x="76" y="46" width="118" height="48" rx="7"/><text x="88" y="67" class="t-b">Ramp</text><text x="88" y="84" class="t-s">&#8804; 200 mm/s&#178;</text>
+          <path class="ln" d="M194 70 H232" marker-end="url(#ar2)"/>
+          <circle cx="248" cy="70" r="15" class="bx"/><text x="243" y="75" class="t-b">&#931;</text>
+          <text x="218" y="40" class="t-s">sync K&#8347;(n&#8343;&#8722;n&#7523;)</text>
+          <path class="ln-amb" d="M248 44 V54" marker-end="url(#ar2)"/>
+          <path class="ln" d="M263 70 H300" marker-end="url(#ar2)"/>
+          <rect class="bx bx-esp" x="302" y="46" width="132" height="48" rx="7"/><text x="314" y="67" class="t-b">FF + PI</text><text x="314" y="84" class="t-s">50 Hz loop</text>
+          <path class="ln" d="M434 70 H470" marker-end="url(#ar2)"/>
+          <rect class="bx bx-esp" x="472" y="46" width="112" height="48" rx="7"/><text x="484" y="67" class="t-b">PWM</text><text x="484" y="84" class="t-s">20 kHz, 10-bit</text>
+          <path class="ln" d="M584 70 H620" marker-end="url(#ar2)"/>
+          <rect class="bx" x="622" y="46" width="184" height="48" rx="7"/><text x="634" y="67" class="t-b">ZS-X11H + hub motor</text><text x="634" y="84" class="t-s">via level shifter</text>
+          <path class="ln" d="M714 94 V150 H560" marker-end="url(#ar2)"/>
+          <rect class="bx bx-esp" x="398" y="128" width="160" height="46" rx="7"/><text x="410" y="148" class="t-b">Hall timing</text><text x="410" y="165" class="t-s">v&#770; = 2k / &#916;t&#8322;</text>
+          <path class="ln" d="M398 150 H248 V86" marker-end="url(#ar2)"/>
+          <text x="256" y="112" class="t-s">&#8722; v&#770;</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 2. Wheel speed loop on the ESP32.</b> The Pi only sends target speeds; distance-based moves,
+        braking and docking logic run on top of this loop.</figcaption>
+    </figure>
+    <p>The lower limit is physics. At 20 mm/s a wheel produces a count only every
+      \( k / v = 8.5 / 20 \approx 0.43 \) s, so the controller sees very little feedback; that's why the slowest manual
+      speeds still look slightly uneven. In practice the robot drives anywhere from 6 mm/s (fine turning) to 130 mm/s.</p>
+    <figure><div class="media" data-media="drivetrain-assembled" data-kind="photo" data-text="Hub motors mounted in the printed lower body"></div>
+      <figcaption><b>Drivetrain</b> mounted in the printed lower body, with the rear caster.</figcaption></figure>
+  </section>
+
+  <!-- 8 -->
+  <section id="electrical">
+    <span class="secnum">08</span>
+    <h2>Electrical design</h2>
+    <h3>Component allocation</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Component</th><th>Board</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>Logitech C920 (camera + microphone)</td><td>Pi, USB</td><td>Vision and voice input</td></tr>
+        <tr><td>MAX98357A I&sup2;S amplifier + 4 &Omega; 5 W speaker</td><td>Pi, I&sup2;S</td><td>Speech and alarm audio</td></tr>
+        <tr><td>PIR motion sensor</td><td>Pi, GPIO24</td><td>Drives security and idle modes, so it must work while everything else sleeps</td></tr>
+        <tr><td>INA226 power monitor</td><td>Pi, I&sup2;C (0x40)</td><td>Battery level and "am I charging" feed decisions on the Pi</td></tr>
+        <tr><td>Flashlight LED</td><td>Pi, GPIO23</td><td>Switched by voice and gestures</td></tr>
+        <tr><td>3 IR obstacle sensors</td><td>ESP32</td><td>Obstacle stops must be a local reflex</td></tr>
+        <tr><td>2&times; MG996R lift servos + potentiometer</td><td>ESP32</td><td>Hardware PWM gives jitter-free servo timing that Linux can't guarantee</td></tr>
+        <tr><td>2&times; ZS-X11H motor controllers</td><td>ESP32, via level shifter</td><td>Real-time speed control</td></tr>
+        <tr><td>Hall taps (odometry)</td><td>ESP32, via dividers</td><td>Counting needs interrupts, not a serial round trip</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Power distribution</h3>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 820 400" role="img" aria-labelledby="pwr-t">
+          <title id="pwr-t">Power tree: battery, switch, 5 V buck, servo buck, motor bus and the charging branch with the INA226</title>
+          <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a9aa3"/></marker></defs>
+          <rect class="bx" x="16" y="150" width="160" height="78" rx="8"/>
+          <text x="30" y="176" class="t-b">Battery</text><text x="30" y="196" class="t-s">7S Li-ion, 25.2 V nominal</text><text x="30" y="214" class="t-s">hoverboard pack</text>
+          <path class="ln" d="M176 189 H214" marker-end="url(#ar3)"/>
+          <rect class="bx" x="216" y="166" width="96" height="46" rx="8"/><text x="230" y="194" class="t-b">Switch</text>
+          <path class="ln" d="M312 189 H340"/>
+          <path class="ln" d="M340 64 V214"/>
+          <path class="ln" d="M340 64 H372" marker-end="url(#ar3)"/>
+          <path class="ln" d="M340 139 H372" marker-end="url(#ar3)"/>
+          <path class="ln" d="M340 214 H372" marker-end="url(#ar3)"/>
+          <rect class="bx" x="374" y="40" width="170" height="48" rx="8"/><text x="388" y="61" class="t-b">5 V buck</text><text x="388" y="78" class="t-s">logic rail</text>
+          <rect class="bx" x="374" y="115" width="170" height="48" rx="8"/><text x="388" y="136" class="t-b">Servo buck</text><text x="388" y="153" class="t-s">keeps servo spikes off the Pi</text>
+          <rect class="bx" x="374" y="190" width="170" height="48" rx="8"/><text x="388" y="211" class="t-b">Pack bus</text><text x="388" y="228" class="t-s">25&#8211;29 V direct</text>
+          <path class="ln" d="M544 64 H584" marker-end="url(#ar3)"/>
+          <path class="ln" d="M544 139 H584" marker-end="url(#ar3)"/>
+          <path class="ln" d="M544 214 H584" marker-end="url(#ar3)"/>
+          <rect class="bx bx-pi" x="586" y="40" width="218" height="48" rx="8"/><text x="598" y="61" class="t-b">Pi 4 (header 5 V) &#183; ESP32</text><text x="598" y="78" class="t-s">amplifier &#183; PIR &#183; INA226 &#183; LEDs</text>
+          <rect class="bx bx-esp" x="586" y="115" width="218" height="48" rx="8"/><text x="598" y="136" class="t-b">2&#215; MG996R lift servos</text><text x="598" y="153" class="t-s">scissor lift</text>
+          <rect class="bx bx-esp" x="586" y="190" width="218" height="48" rx="8"/><text x="598" y="211" class="t-b">2&#215; ZS-X11H &#8594; hub motors</text><text x="598" y="228" class="t-s">DIR + PWM from ESP32</text>
+
+          <rect class="bx" x="586" y="300" width="218" height="58" rx="8"/><text x="598" y="322" class="t-b">Dock charger</text><text x="598" y="341" class="t-s">29.7 V open circuit &#8594; spring pads</text>
+          <path class="ln-acc" d="M586 329 H548" marker-end="url(#ar3)"/>
+          <rect class="bx bx-warn" x="388" y="305" width="158" height="48" rx="8"/><text x="400" y="326" class="t-b">1N4007</text><text x="400" y="343" class="t-s">in the + pad lead</text>
+          <path class="ln-acc" d="M388 329 H348" marker-end="url(#ar3)"/>
+          <rect class="bx bx-pi" x="196" y="305" width="150" height="48" rx="8"/><text x="208" y="326" class="t-b">INA226</text><text x="208" y="343" class="t-s">0.1 &#937; shunt</text>
+          <path class="ln-acc" d="M196 329 H96 V230" marker-end="url(#ar3)"/>
+          <text x="104" y="290" class="t-s t-acc">charging branch only</text>
+          <text x="16" y="386" class="t-s t-amb">No fuses are fitted yet &#8212; the first item in Future improvements (section 16).</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 3. Power tree.</b> The two parallel power pairs from the hoverboard pack are the same node, so I
+        tapped one without cutting the original wiring. The INA226 only sees the charging branch.</figcaption>
+    </figure>
+
+    <h3>The INA226 on its own charging branch</h3>
+    <p>My first plan put the INA226's shunt in series with the main battery lead to measure total current. That can't
+      work: hub-motor current is far beyond what the breakout's shunt can measure.</p>
+    <div class="eq">\[ I_{\max} = \frac{V_{\text{shunt,max}}}{R_{\text{shunt}}} = \frac{81.92\ \text{mV}}{0.1\ \Omega} = 0.819\ \text{A} \]</div>
+    <p>What the robot really needs to know is <em>whether it is charging</em>, so the INA226 sits on a separate charging
+      branch: IN+ to the battery, IN&minus; toward the charging contact, with the bus-voltage pin tied to IN&minus; so the
+      same chip also reports pack voltage. Charging current reads negative in this orientation; I confirmed the sign on the
+      robot and flip it in software.</p>
+    <div class="note warn"><span class="eyebrow">Finding</span>
+      <p>While charging, the INA226 reports exactly 0.819 A every time. That is the full-scale value above, so the real charge
+        current is <strong>at least</strong> 0.82 A and the sensor is saturated. It still answers "charging or not"
+        reliably, which is all the docking logic needs, but measuring the true current needs a smaller shunt
+        (<a href="#future">section 16</a>). The original shunt also burned out once and had to be replaced.</p></div>
+    <p><strong>Battery percentage.</strong> Li-ion voltage isn't linear in charge, so I divide the pack voltage by the 7
+      cells and interpolate a per-cell discharge curve (3.20 V = 0%, 3.70 V = 47%, 4.20 V = 100%, eleven points):</p>
+    <div class="eq">\[ v = \frac{V_{\text{pack}}}{7}, \qquad \%(v) = p_i + (p_{i+1} - p_i)\,\frac{v - v_i}{v_{i+1} - v_i}, \quad v_i \le v \le v_{i+1} \]</div>
+    <p><strong>Charger and diode.</strong> The charger measures 29.7 V with no load on my multimeter. The 1N4007 in the
+      positive pad lead drops roughly 0.8 V, so the pack tops out near 28.9 V:</p>
+    <div class="eq">\[ \frac{28.9\ \text{V}}{7} \approx 4.13\ \text{V/cell} \;\Rightarrow\; \approx 94\% \text{ on the curve} \]</div>
+    <p>That is gentler on the cells than a full 4.2 V and still above the 90% point where the robot drives off the
+      charger (<a href="#power">section 12</a>).</p>
+
+    <h3>Raspberry Pi connections</h3>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 800 330" role="img" aria-labelledby="pi-t">
+          <title id="pi-t">Raspberry Pi 40-pin header with the pins Qwen uses</title>
+          <rect class="bx" x="52" y="132" width="700" height="64" rx="8"/>
+          <text x="56" y="222" class="t-s">pin 1</text><text x="712" y="222" class="t-s">pin 39</text>
+                    <!-- pins: x = 70 + 34*k ; even row y=150, odd row y=178 -->
+          <g class="t-s">
+          <!-- all pins as dots -->
+          <circle cx="70" cy="150" r="7" class="fill-red"/><circle cx="70" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="104" cy="150" r="7" class="fill-red"/><circle cx="104" cy="178" r="7" class="fill-acc"/>
+          <circle cx="138" cy="150" r="7" fill="#556169"/><circle cx="138" cy="178" r="7" class="fill-acc"/>
+          <circle cx="172" cy="150" r="7" class="fill-blu"/><circle cx="172" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="206" cy="150" r="7" class="fill-blu"/><circle cx="206" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="240" cy="150" r="7" class="fill-acc"/><circle cx="240" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="274" cy="150" r="4" fill="#3a454c"/><circle cx="274" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="308" cy="150" r="7" class="fill-amb"/><circle cx="308" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="342" cy="150" r="7" class="fill-amb"/><circle cx="342" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="376" cy="150" r="4" fill="#3a454c"/><circle cx="376" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="410" cy="150" r="4" fill="#3a454c"/><circle cx="410" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="444" cy="150" r="4" fill="#3a454c"/><circle cx="444" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="478" cy="150" r="4" fill="#3a454c"/><circle cx="478" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="512" cy="150" r="4" fill="#3a454c"/><circle cx="512" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="546" cy="150" r="4" fill="#3a454c"/><circle cx="546" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="580" cy="150" r="4" fill="#3a454c"/><circle cx="580" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="614" cy="150" r="4" fill="#3a454c"/><circle cx="614" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="648" cy="150" r="4" fill="#3a454c"/><circle cx="648" cy="178" r="7" class="fill-acc"/>
+          <circle cx="682" cy="150" r="4" fill="#3a454c"/><circle cx="682" cy="178" r="4" fill="#3a454c"/>
+          <circle cx="716" cy="150" r="7" class="fill-acc"/><circle cx="716" cy="178" r="4" fill="#3a454c"/>
+          </g>
+          <!-- labels: even pins above, odd below -->
+          <g>
+            <text transform="translate(74 132) rotate(-50)" class="t-s">2 &#183; 5 V</text>
+            <text transform="translate(108 132) rotate(-50)" class="t-s">4 &#183; 5 V</text>
+            <text transform="translate(142 132) rotate(-50)" class="t-s">6 &#183; GND</text>
+            <text transform="translate(176 132) rotate(-50)" class="t-s t-blu">8 &#183; GPIO14 TX &#8594; ESP32 22</text>
+            <text transform="translate(210 132) rotate(-50)" class="t-s t-blu">10 &#183; GPIO15 RX &#8592; ESP32 21</text>
+            <text transform="translate(244 132) rotate(-50)" class="t-s t-acc">12 &#183; GPIO18 I&#178;S BCLK</text>
+            <text transform="translate(312 132) rotate(-50)" class="t-s t-amb">16 &#183; GPIO23 flashlight</text>
+            <text transform="translate(346 132) rotate(-50)" class="t-s t-amb">18 &#183; GPIO24 PIR</text>
+            <text transform="translate(720 132) rotate(-50)" class="t-s t-acc">40 &#183; GPIO21 I&#178;S DIN</text>
+            <text transform="translate(98 198) rotate(50)" class="t-s t-acc">3 &#183; GPIO2 SDA (INA226)</text>
+            <text transform="translate(132 198) rotate(50)" class="t-s t-acc">5 &#183; GPIO3 SCL (INA226)</text>
+            <text transform="translate(642 198) rotate(50)" class="t-s t-acc">35 &#183; GPIO19 I&#178;S LRC</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption><b>Figure 4. Raspberry Pi header.</b> The Pi is powered through the header 5 V pins (2 and 4, the same
+        rail) with several grounds. Header power bypasses the protection on the USB-C input, which is why a PTC fuse and
+        TVS diode are on the improvement list. The Pi&ndash;ESP32 link is 3.3 V on both sides, so no level shifter is needed.</figcaption>
+    </figure>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Signal</th><th>Pi GPIO (pin)</th><th>Goes to</th></tr></thead>
+      <tbody>
+        <tr><td>UART TX / RX</td><td class="mono">14 (8) / 15 (10)</td><td>ESP32 GPIO22 (RX) / GPIO21 (TX), 115200 baud, common ground</td></tr>
+        <tr><td>I&sup2;S BCLK / LRC / DIN</td><td class="mono">18 (12) / 19 (35) / 21 (40)</td><td>MAX98357A (the Pi's hardware I&sup2;S pins are fixed)</td></tr>
+        <tr><td>I&sup2;C SDA / SCL</td><td class="mono">2 (3) / 3 (5)</td><td>INA226 at address 0x40</td></tr>
+        <tr><td>PIR</td><td class="mono">24 (18)</td><td>Motion sensor output</td></tr>
+        <tr><td>Flashlight</td><td class="mono">23 (16)</td><td>Small LED driven straight from the GPIO</td></tr>
+        <tr><td>Camera + microphone</td><td class="mono">USB</td><td>Logitech C920</td></tr>
+      </tbody>
+    </table></div>
+    <figure><div class="media" data-media="perfboard-pi" data-kind="photo"></div>
+      <figcaption><b>The Pi's perfboard hat</b>, hand-soldered: power, UART, I&sup2;S, I&sup2;C, PIR and flashlight wiring.</figcaption></figure>
+
+    <h3>ESP32 connections</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Function</th><th>ESP32 GPIO</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Left motor PWM / DIR</td><td class="mono">17 / 13</td><td>Through the level shifter; 20 kHz, 10-bit</td></tr>
+        <tr><td>Right motor PWM / DIR</td><td class="mono">18 / 5</td><td>DIR on GPIO5 (a strapping pin, fine as an output after boot)</td></tr>
+        <tr><td>Left hall A / B</td><td class="mono">16 / 23</td><td>Through 10 k&Omega; dividers</td></tr>
+        <tr><td>Right hall A / B</td><td class="mono">32 / 19</td><td>Through 10 k&Omega; dividers</td></tr>
+        <tr><td>IR bottom-left / middle / right</td><td class="mono">15 / 35 / 4</td><td>Modules powered at 3.3 V; GPIO35 is input-only with an external 10 k&Omega; pull-down</td></tr>
+        <tr><td>Lift servos (bottom / top)</td><td class="mono">25 / 33</td><td>Both get the same angle, 0&ndash;130&deg;</td></tr>
+        <tr><td>Lift potentiometer</td><td class="mono">34</td><td>ADC1, so it works with Wi-Fi on</td></tr>
+        <tr><td>Battery LEDs green / yellow / red</td><td class="mono">26 / 27 / 14</td><td>Each through 220 &Omega;</td></tr>
+        <tr><td>Status LED (white)</td><td class="mono">12</td><td>Through 220 &Omega;: listening, thinking, recording, armed</td></tr>
+        <tr><td>Link RX / TX</td><td class="mono">22 / 21</td><td>Serial2 to the Pi</td></tr>
+      </tbody>
+    </table></div>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 820 300" role="img" aria-labelledby="esp-t">
+          <title id="esp-t">Three ESP32 interface circuits: motor channel through the level shifter, hall-sensor divider, LED resistor</title>
+          <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a9aa3"/></marker></defs>
+          <text x="16" y="26" class="t-b">a &#183; Motor channel</text>
+          <rect class="bx bx-esp" x="16" y="44" width="96" height="70" rx="7"/><text x="26" y="66" class="t-b">ESP32</text><text x="26" y="84" class="t-s t-mono">PWM 17</text><text x="26" y="100" class="t-s t-mono">DIR 13</text>
+          <path class="ln" d="M112 70 H134" marker-end="url(#ar4)"/><path class="ln" d="M112 94 H134" marker-end="url(#ar4)"/>
+          <rect class="bx" x="136" y="44" width="100" height="70" rx="7"/><text x="146" y="66" class="t-b">Level</text><text x="146" y="82" class="t-b">shifter</text><text x="146" y="100" class="t-s">3.3 V &#8594; 5 V</text>
+                    <rect class="bx" x="16" y="140" width="240" height="56" rx="7"/><text x="26" y="162" class="t-b">ZS-X11H</text><text x="26" y="180" class="t-s">P (PWM in), DIR &#8594; hub motor</text>
+          <path class="ln" d="M236 82 H262 V120 H136 V138" marker-end="url(#ar4)"/>
+          <text x="16" y="228" class="t-s t-amb">The shifter's 10 k&#937; pull-ups hold PWM at 5 V</text>
+          <text x="16" y="244" class="t-s t-amb">when the ESP32 isn't driving &#8594; full speed.</text>
+          <text x="16" y="260" class="t-s t-amb">Fix: 10 k&#937; pull-downs (section 16).</text>
+
+          <text x="296" y="26" class="t-b">b &#183; Hall tap divider (&#215;4)</text>
+          <text x="296" y="62" class="t-s">hall out, 5 V</text>
+          <path class="ln" d="M380 58 H420"/>
+          <rect class="bx" x="420" y="48" width="56" height="20" rx="3"/><text x="430" y="62" class="t-s t-mono">10 k</text>
+          <path class="ln" d="M476 58 H520"/>
+          <circle cx="520" cy="58" r="3.5" class="fill-txt"/>
+          <path class="ln" d="M520 58 H560" marker-end="url(#ar4)"/><text x="564" y="62" class="t-s t-blu">GPIO</text>
+          <path class="ln" d="M520 58 V82"/>
+          <rect class="bx" x="510" y="82" width="20" height="44" rx="3"/><text x="536" y="108" class="t-s t-mono">10 k</text>
+          <path class="ln" d="M520 126 V140"/>
+          <rect class="bx" x="510" y="140" width="20" height="44" rx="3"/><text x="536" y="166" class="t-s t-mono">10 k</text>
+          <path class="ln" d="M520 184 V204"/><path class="ln" d="M506 204 H534 M511 210 H529 M516 216 H524"/>
+          <text x="296" y="244" class="t-s">V = 5 &#215; 20k / 30k = 3.33 V</text>
+          <text x="296" y="260" class="t-s">GPIO 16, 23 (left) &#183; 32, 19 (right)</text>
+
+          <text x="620" y="26" class="t-b">c &#183; LEDs (&#215;4)</text>
+          <text x="620" y="62" class="t-s t-blu">GPIO</text>
+          <path class="ln" d="M654 58 H676"/>
+          <rect class="bx" x="676" y="48" width="56" height="20" rx="3"/><text x="684" y="62" class="t-s t-mono">220 &#937;</text>
+          <path class="ln" d="M732 58 H760 V80"/>
+          <path d="M748 80 H772 L760 100 Z" class="fill-amb"/><path class="ln" d="M748 100 H772"/>
+          <path class="ln" d="M760 100 V124"/><path class="ln" d="M746 124 H774 M751 130 H769 M756 136 H764"/>
+          <text x="620" y="176" class="t-s">G 26 &#183; Y 27 &#183; R 14 &#183; W 12</text>
+          <text x="620" y="196" class="t-s">I = (3.3 &#8722; V&#8166;) / 220 &#937;</text>
+          <text x="620" y="212" class="t-s">&#8776; 1.4&#8211;5.9 mA</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 5. ESP32 interface circuits.</b> (a) one of the two motor channels; (b) one of the four hall
+        dividers, three 10 k&Omega; resistors each; (c) one of the four indicator LEDs.</figcaption>
+    </figure>
+    <p>With a forward voltage between about 2.0 V (red) and 3.0 V (white), each LED draws</p>
+    <div class="eq">\[ I_{\text{LED}} = \frac{3.3\ \text{V} - V_f}{220\ \Omega} \approx 1.4\text{&ndash;}5.9\ \text{mA} \]</div>
+    <p>which is well inside the ESP32's per-pin limit and bright enough behind the front panel.</p>
+    <figure><div class="media" data-media="perfboard-esp32" data-kind="photo"></div>
+      <figcaption><b>The ESP32 perfboard</b> with the level shifter (top left) and the 10 k&Omega; divider resistors.</figcaption></figure>
+
+    <h3>Pin-map review</h3>
+    <p>Before soldering I reviewed the first pin map and found several conflicts:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Proposed</th><th>Problem</th><th>Resolution</th></tr></thead>
+      <tbody>
+        <tr><td>Pi I&sup2;S on GPIO 17/27/22</td><td>The Pi's hardware I&sup2;S is fixed to specific pins</td><td>GPIO 18 / 19 / 21</td></tr>
+        <tr><td>IR sensor on ESP32 GPIO2</td><td>Boot-strapping pin wired to the onboard LED; a high input can block flashing</td><td>GPIO35 (input-only) with a pull-down</td></tr>
+        <tr><td>Status LED on GPIO12</td><td>Strapping pin: high at boot selects the wrong flash voltage</td><td>Kept on 12: the LED and resistor to ground hold it low at boot, which is the safe level</td></tr>
+        <tr><td>IR modules at 5 V</td><td>Their output follows the supply, so 5 V would reach a 3.3 V input</td><td>Powered at 3.3 V</td></tr>
+        <tr><td>Pi link on ESP32 UART0 (GPIO 1/3)</td><td>UART0 is shared with the USB programming port</td><td>Serial2 on GPIO 22/21</td></tr>
+        <tr><td>Arduino <code>Servo.h</code>, pot mapped 0&ndash;1023</td><td>AVR-only library; the ESP32 ADC is 12-bit</td><td><code>ESP32Servo</code>, mapped from 0&ndash;4095</td></tr>
+      </tbody>
+    </table></div>
+    <p>Before integration I wrote a small test for every component (IR, motors, lift, LEDs, PIR, speaker, INA226,
+      flashlight, serial link), so each part was known-good before it was combined with anything else.</p>
+  </section>
+
+  <!-- 9 -->
+  <section id="docking">
+    <span class="secnum">09</span>
+    <h2>Docking and automatic recharging</h2>
+    <p>The dock is deliberately simple: two spring-loaded metal pads, the same kind robot vacuums use, glued to a flat
+      plastic plate on the wall just above the baseboard. The robot's contacts are on its <em>back</em>, and it has no rear
+      sensors, so docking means reversing blind onto two small pads. Above the dock are two printed AprilTags (tag36h11,
+      79 mm black square, IDs 0 and 1, 160 mm apart).</p>
+    <div class="fig-row">
+      <figure><div class="media tall" data-media="dock-pads" data-kind="photo"></div>
+        <figcaption><b>The dock:</b> two spring pads on a plastic plate. Success means charging current flows.</figcaption></figure>
+      <figure><div class="media tall" data-media="docking-live-view" data-kind="photo" data-text="Control page during docking: tag boxes, grid, battery and temperature"></div>
+        <figcaption><b>The docking view</b> on the control page: tag boxes, centre band, pose read-out, battery and Pi temperature.</figcaption></figure>
+    </div>
+
+    <h3>Plan versus outcome</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Question at planning time</th><th>What I found</th></tr></thead>
+      <tbody>
+        <tr><td>Can ORB-SLAM run on a Pi 4 alongside everything else?</td><td>Yes, at about 5&ndash;10 fps (70&ndash;160 ms per frame) with the Pi reaching about 75 &deg;C. Too slow and too heavy for docking, so docking uses AprilTags, and ORB-SLAM became the lost-tag fallback (<a href="#mapping">section 10</a>).</td></tr>
+        <tr><td>What gives scale and odometry without an IMU?</td><td>Hall-sensor wheel odometry (section 7) for distance, and the tags for metric position near the dock.</td></tr>
+        <tr><td>Forward or reverse onto the contacts?</td><td>Approach forward facing the tags, turn 180&deg;, then reverse using a "docked view" match from the camera, now facing the room.</td></tr>
+        <tr><td>How is a successful dock confirmed?</td><td>Charging current on the INA226 branch, held for 3 s.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Pose from the tags</h3>
+    <p>The camera (calibrated focal length \(f = 645\) px) gives the tag's rotation \(R\) and translation \(t\). Inverting
+      that gives the robot's position in the wall's frame: <em>lateral</em> (sideways from tag 0, + to the right when facing
+      the wall), <em>out</em> (distance from the wall) and <em>heading</em>:</p>
+    <div class="eq">\[ p = -R^{\mathsf T} t, \qquad \text{lateral} = p_x,\quad \text{out} = p_z, \qquad f = R^{\mathsf T}\!\begin{bmatrix}0\\0\\1\end{bmatrix},\quad \text{heading} = \operatorname{atan2}(f_x,\,-f_z) \]</div>
+    <p>One pixel is \(1/f \approx 0.089^\circ\), and a 79 mm tag at 1 m is only \(79 \cdot 645 / 1000 \approx 51\) px wide,
+      so every source of blur mattered.</p>
+
+    <h3>The four steps</h3>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 820 430" role="img" aria-labelledby="dock-t">
+          <title id="dock-t">Top view of the docking sequence: line up on the dock line, drive to the turn spot, turn 180 degrees, reverse onto the pads</title>
+          <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#6cc3a0"/></marker>
+            <marker id="ar5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e2b04e"/></marker></defs>
+          <rect x="40" y="22" width="740" height="12" fill="#2a3338"/>
+          <text x="44" y="16" class="t-s">wall</text>
+          <rect x="318" y="36" width="22" height="8" class="fill-txt"/><text x="300" y="60" class="t-s">ID 0</text>
+          <rect x="398" y="36" width="22" height="8" class="fill-txt"/><text x="398" y="60" class="t-s">ID 1</text>
+          <path class="ln" d="M329 74 H409"/><path class="ln" d="M329 69 V79 M409 69 V79"/><text x="345" y="92" class="t-s">160 mm</text>
+          <rect x="356" y="36" width="12" height="7" class="fill-amb"/><rect x="380" y="36" width="12" height="7" class="fill-amb"/>
+          <text x="440" y="44" class="t-s t-amb">pads</text>
+          <path class="ln-acc dash" d="M374 44 V410"/>
+          <text x="384" y="404" class="t-s t-acc">dock line: 9.0 cm right of ID 0</text>
+          <!-- turn spot -->
+          <path class="ln dash" d="M200 166 H560"/><text x="566" y="170" class="t-s">turn spot: 37 cm out</text>
+          <path class="ln dash" d="M200 300 H560"/><text x="566" y="304" class="t-s">line-up: 80&#8211;95 cm out</text>
+          <!-- robots -->
+          <rect x="604" y="336" width="52" height="40" rx="8" class="bx bx-warn"/><text x="612" y="392" class="t-s">start</text>
+          <path class="ln-amb" d="M604 350 C520 340 440 316 392 304" marker-end="url(#ar5b)"/>
+          <text x="470" y="352" class="t-s t-amb">1 &#183; close in, sidestep</text>
+          <rect x="348" y="280" width="52" height="40" rx="8" class="bx bx-pi"/>
+          <path class="ln-acc" d="M374 278 V190" marker-end="url(#ar5)"/>
+          <text x="384" y="236" class="t-s t-acc">2 &#183; forward in 10 cm legs</text>
+          <rect x="348" y="146" width="52" height="40" rx="8" class="bx bx-pi"/>
+          <path class="ln-acc" d="M336 176 A40 40 0 1 1 338 156" marker-end="url(#ar5)"/>
+          <text x="196" y="140" class="t-s t-acc">3 &#183; turn 180&#176;</text>
+          <path class="ln-acc" d="M374 144 V54" marker-end="url(#ar5)"/>
+          <text x="384" y="112" class="t-s t-acc">4 &#183; reverse onto pads</text>
+          <!-- axes -->
+          <path class="ln" d="M70 400 H130" marker-end="url(#ar5)"/><text x="136" y="404" class="t-s">lateral +</text>
+          <path class="ln" d="M70 400 V340" marker-end="url(#ar5)"/><text x="58" y="332" class="t-s">out +</text>
+          <text x="600" y="420" class="t-s">robot not to scale</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 6. The docking sequence.</b> Each step finishes with a measured result and the next step won't
+        start from a bad one.</figcaption>
+    </figure>
+    <ol>
+      <li><strong>Find and line up.</strong> A 360&deg; stop-and-look scan finds the tags. Farther than 95 cm out, the robot
+        first drives straight at them to about 80 cm, then sidesteps (turn 90&deg;, drive the offset on odometry, turn back)
+        until it is within 1.5 cm of the dock line <em>after</em> facing the wall again.</li>
+      <li><strong>Drive to the turn spot</strong> in 10 cm odometry legs, re-facing the wall between legs, and stop 37 cm out.
+        If it arrives more than 3 cm off the line, it backs out to 70 cm and lines up again.</li>
+      <li><strong>Turn around.</strong> Turning in place slips on this floor, so the turn is checked by the camera: it spins in
+        small speed-controlled chunks until the view matches the "docked view" taught earlier.</li>
+      <li><strong>Back on.</strong> It compares ORB features in the live image against pictures taken while docked to keep
+        its heading within 3&deg;, then reverses in gentle 25 mm/s pulses. It stops the moment charging current appears,
+        and the dock counts only when charging holds for 3 s.</li>
+    </ol>
+
+    <h3>Calibrating the dock line from manual docks</h3>
+    <p>My first "dock line" (the lateral position the robot should hold) was computed from the geometry, and the robot
+      kept landing a few centimetres off. So I drove five docks by hand while the robot recorded where I was before turning
+      around. The lateral positions were 8.6, 8.6, 10.0, 9.4 and 8.5 cm; the turn distances were 32, 38, 38, 41 and 36 cm.</p>
+    <div class="eq">\[ \bar{x} = 9.02\ \text{cm},\quad s_x = 0.66\ \text{cm} \;\Rightarrow\; x_{\text{line}} = 9.0\ \text{cm},\ \text{tolerance } \pm 1.5\ \text{cm} \ (\approx 2.3\,s_x); \qquad \bar{d} = 37.0\ \text{cm} \]</div>
+    <p>Small heading errors during the blind reverse grow into sideways error at the pads:</p>
+    <div class="eq">\[ e_{\text{pads}} \approx e_{\text{line}} + L\sin\psi, \qquad L = 37\ \text{cm},\ \psi = 1^\circ \;\Rightarrow\; L\sin\psi \approx 6.5\ \text{mm} \]</div>
+    <p>That's why the heading is re-checked against the docked view every few centimetres while reversing, and why the line
+      tolerance is tight.</p>
+
+    <h3>What failed and how I fixed it</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Problem</th><th>Cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Tag detected in 0 of 20 frames at 30&ndash;80 cm</td><td>The C920's autofocus kept hunting and blurring the tag</td><td>Fixed focus: 20 of 20 frames detected</td></tr>
+        <tr><td>Robot sure it was on the wrong side of the dock</td><td>A single square tag has two mirror-image pose solutions</td><td>A side check that moves and sees which solution moved correctly, then the second tag: 8 corners in one PnP solve give a single answer</td></tr>
+        <tr><td>Turns came out 160&deg; or 200&deg;</td><td>Wheel slip and caster swing when spinning on wood</td><td>Camera-measured turns, and an effective wheel spacing from calibration</td></tr>
+        <tr><td>Reverse twisted and the caster slammed</td><td>Hard starts and one wheel lagging</td><td>Acceleration limit, wheel sync, reverse limit by distance</td></tr>
+        <tr><td>Contact detected when the robot wasn't touching</td><td>One stalled reverse looked like contact</td><td>Contact only after two stalled rounds, and success only on charging current</td></tr>
+        <tr><td>Lined up on tag 0 instead of between the tags</td><td>Step 1 reported "lined up" after a sidestep even though facing the wall had moved it 12 cm</td><td>Step 1 only finishes when it is on the line <em>after</em> facing the wall; step 2 backs out and retries if more than 3 cm off</td></tr>
+        <tr><td>Sidestepped into a beanbag</td><td>It started correcting sideways from 1.6 m away, where the side of the room is cluttered</td><td>Drive toward the tags to about 80 cm first; front IR stops sidesteps</td></tr>
+        <tr><td>A bad reading ("96 cm off") almost drove it 1 m blind</td><td>No sanity limit on the correction</td><td>Each sidestep is capped at 30 cm and re-measured</td></tr>
+        <tr><td>Wiggling to seat the contacts made things worse</td><td>The wiggles were far bigger than the few-millimetre error</td><td>Removed; the robot pulls forward and retries instead</td></tr>
+      </tbody>
+    </table></div>
+    <figure><div class="media" data-media="docking-run" data-kind="video" data-text="Full return-to-dock and charging sequence"></div>
+      <figcaption><b>A full docking run:</b> line up, approach, turn, reverse, charging confirmed.</figcaption></figure>
+    <p>After these fixes the robot docked from across the room with the turn spot within about 1 cm of the dock line. Its
+      position at the pads is still the weakest point: some runs end a few millimetres off and touch the pads without
+      charging. The remedies are mechanical (<a href="#future">section 16</a>).</p>
+  </section>
+
+  <!-- 10 -->
+  <section id="mapping">
+    <span class="secnum">10</span>
+    <h2>Room mapping and the lost-tag search</h2>
+    <p>Docking only works when the robot can see the tags. If the 360&deg; scan finds nothing (it was carried to another
+      room, or the tags are behind furniture), Qwen switches the tag tracker into monocular ORB-SLAM mode and searches. It
+      drives slowly outward in gentle arcs, with the IR sensors stopping it for obstacles, and builds a map as it goes. The
+      map lets it steer toward directions it hasn't covered yet. Every metre or so it stops and repeats the tag scan. As soon
+      as either tag is seen, normal docking takes over; if the search runs out of time, it tells me on Telegram.</p>
+    <figure><div class="media" data-media="lost-tag-search" data-kind="video" data-text="Lost-tag search: ORB-SLAM features while the robot looks for the dock"></div>
+      <figcaption><b>Lost-tag search.</b> ORB-SLAM feature points (green) while the robot looks for its dock.</figcaption></figure>
+
+    <h3>Running ORB-SLAM on a Pi 4</h3>
+    <p>I built ORB-SLAM3 on the Pi and wrapped it in a C++ program that also does the AprilTag detection, so the two share
+      one camera stream. With 800 features per frame, tracking takes 70&ndash;160 ms per frame (5&ndash;10 fps). Two numbers
+      shaped how the robot has to drive in this mode. A monocular camera can't measure depth from rotation alone, and fast
+      turns move features too far between frames:</p>
+    <div class="eq">\[ \Delta\phi_{\text{frame}} = \frac{\omega}{f_{\text{fps}}}: \qquad \frac{41^\circ/\text{s}}{5.5\ \text{fps}} \approx 7.5^\circ \text{ per frame (tracking lost)}, \qquad \frac{9^\circ/\text{s}}{5.5\ \text{fps}} \approx 1.6^\circ \text{ per frame} \]</div>
+    <p>So in SLAM mode turns are limited to about 9&deg;/s and done as arcs, never pivots.</p>
+
+    <h3>Building a 2D floor map</h3>
+    <p>To test mapping I drove the robot around the room by hand while it recorded every frame plus wheel counts and tag
+      sightings, then processed the recording offline. ORB-SLAM gives a sparse 3D point cloud, not a floor plan, so I built
+      the 2D map myself:</p>
+    <ul>
+      <li>The floor plane comes from the camera's "up" direction, averaged over all keyframes.</li>
+      <li>Points between 3 cm and 60 cm above the floor are obstacles; rays from each keyframe to what it saw mark free space.</li>
+      <li>ORB-SLAM starts a new map every time it loses tracking, so the wheel odometry is the backbone: every map piece is
+        placed on the odometry path with a rotation, a scale and an offset.</li>
+    </ul>
+    <div class="eq">\[ Q \approx s\,R(\alpha)\,S + t, \qquad s = \frac{\sum \lVert \Delta Q \rVert}{\sum \lVert \Delta S \rVert}, \qquad \alpha = \arg\!\Big(\sum e^{\,i(\theta_{\text{odo}} - \psi_{\text{slam}})}\Big) \]</div>
+    <p>where \(S\) is a SLAM piece's path in the floor plane, \(Q\) the odometry path at the same times, \(\theta\) and
+      \(\psi\) the two headings, and \(t\) the mean remaining offset.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Mapping drive</th><th class="num">Length</th><th class="num">Frames tracked</th><th class="num">Map pieces</th><th class="num">Keyframes / points</th></tr></thead>
+      <tbody>
+        <tr><td>1: fast turns (41&deg;/s)</td><td class="num">10 min, 28 m</td><td class="num">64%</td><td class="num">16</td><td class="num">404 / 14 750</td></tr>
+        <tr><td>2: slow turns (9&deg;/s)</td><td class="num">17 min, 56 m</td><td class="num">60%</td><td class="num">20</td><td class="num">1 019 / 31 490</td></tr>
+      </tbody>
+    </table></div>
+    <figure><div class="media" data-media="orbslam-map" data-kind="photo"></div>
+      <figcaption><b>Figure 7. Floor map from the second drive</b> (50 cm grid). Blue: the driven path; black: obstacle
+        points; red: the dock and its wall, placed from 533 tag sightings.</figcaption></figure>
+    <div class="note fail"><span class="eyebrow">Limits I measured</span>
+      <p>The map shows the room's main structure but is not accurate enough for path planning. The weak link is
+        <strong>heading</strong>: across the second drive the robot turned a total of 8,474&deg;, and every spin on wood
+        slips a little. By the end, the dock's position estimated from different tag sightings disagreed by about 1.3 m. One
+        camera also has no true scale, so each SLAM piece's scale wanders. That's why the map is used to <em>search</em>
+        (where have I been?) and not to navigate, and why docking itself relies on the tags. A gyro would fix the heading
+        drift (<a href="#future">section 16</a>).</p></div>
+    <figure><div class="media" data-media="mapping-run" data-kind="video" data-text="Mapping drive with the live mini-map in the corner"></div>
+      <figcaption><b>A mapping drive</b> with the live top-down mini-map drawn in the corner of the camera view.</figcaption></figure>
+  </section>
+
+  <!-- 11 -->
+  <section id="modes">
+    <span class="secnum">11</span>
+    <h2>Operating modes</h2>
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 820 450" role="img" aria-labelledby="st-t">
+          <title id="st-t">State diagram: awake, idle, security mode, return to dock, lost-tag search, charging</title>
+          <defs><marker id="ar6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a9aa3"/></marker></defs>
+          <!-- awake / idle -->
+          <rect class="bx bx-pi" x="56" y="62" width="176" height="56" rx="10"/><text x="70" y="85" class="t-b">Awake</text><text x="70" y="104" class="t-s">voice &#183; gestures &#183; vision</text>
+          <rect class="bx" x="56" y="214" width="176" height="56" rx="10"/><text x="70" y="237" class="t-b">Idle</text><text x="70" y="256" class="t-s">motion sensor only</text>
+          <path class="ln" d="M100 118 V212" marker-end="url(#ar6)"/><text x="106" y="158" class="t-s">2 min, no</text><text x="106" y="172" class="t-s">motion</text>
+          <path class="ln" d="M180 214 V120" marker-end="url(#ar6)"/><text x="186" y="160" class="t-s">motion</text>
+          <!-- security -->
+          <rect class="bx-grp" x="292" y="36" width="250" height="296" rx="12"/>
+          <text x="306" y="56" class="t-s t-b">SECURITY MODE</text>
+          <rect class="bx bx-esp" x="308" y="70" width="218" height="46" rx="9"/><text x="320" y="91" class="t-b">Arming</text><text x="320" y="107" class="t-s">100 s exit delay</text>
+          <rect class="bx bx-esp" x="308" y="160" width="218" height="46" rx="9"/><text x="320" y="181" class="t-b">Armed-idle</text><text x="320" y="197" class="t-s">PIR only</text>
+          <rect class="bx bx-esp" x="308" y="250" width="218" height="66" rx="9"/><text x="320" y="271" class="t-b">Armed-active</text><text x="320" y="288" class="t-s">faces + people &#183; record</text><text x="320" y="304" class="t-s">warn &#183; alarm after 25 s</text>
+          <path class="ln" d="M380 116 V158" marker-end="url(#ar6)"/>
+          <path class="ln" d="M400 206 V248" marker-end="url(#ar6)"/><text x="406" y="232" class="t-s">motion</text>
+          <path class="ln" d="M470 248 V208" marker-end="url(#ar6)"/><text x="476" y="232" class="t-s">2 min clear</text>
+          <path class="ln" d="M232 80 H306" marker-end="url(#ar6)"/><text x="238" y="72" class="t-s">voice / keypad</text>
+          <path class="ln" d="M306 300 H246 V100 H236" marker-end="url(#ar6)"/><text x="196" y="318" class="t-s">owner face or keypad code</text>
+          <path class="ln-amb" d="M232 250 L306 272" marker-end="url(#ar6)"/><text x="236" y="290" class="t-s t-amb">remote unlock</text>
+          <!-- docking -->
+          <rect class="bx bx-pi" x="610" y="62" width="196" height="56" rx="10"/><text x="624" y="85" class="t-b">Return to dock</text><text x="624" y="104" class="t-s">steps 1&#8211;4</text>
+          <rect class="bx bx-warn" x="610" y="184" width="196" height="56" rx="10"/><text x="624" y="207" class="t-b">Lost-tag search</text><text x="624" y="226" class="t-s">ORB-SLAM + rescans</text>
+          <rect class="bx bx-pi" x="610" y="318" width="196" height="56" rx="10"/><text x="624" y="341" class="t-b">Charging</text><text x="624" y="360" class="t-s">lift locked &#183; LEDs solid</text>
+          <path class="ln" d="M144 62 V20 H708 V60" marker-end="url(#ar6)"/><text x="330" y="14" class="t-s">battery &#8804; 25 % and idle for 30 s: "Low battery, returning to dock"</text>
+          <path class="ln" d="M650 118 V182" marker-end="url(#ar6)"/><text x="560" y="150" class="t-s">no tags</text><text x="560" y="164" class="t-s">after 360&#176;</text>
+          <path class="ln" d="M770 184 V120" marker-end="url(#ar6)"/><text x="776" y="150" class="t-s">tags</text><text x="776" y="164" class="t-s">found</text>
+          <path class="ln" d="M812 90 H814 V346 H808" marker-end="url(#ar6)"/>
+          <text x="690" y="290" class="t-s">charge held 3 s</text>
+          <path class="ln-amb" d="M610 226 L560 386" marker-end="url(#ar6)"/>
+          <rect class="bx bx-warn" x="440" y="388" width="160" height="44" rx="9"/><text x="452" y="408" class="t-b">Alert owner</text><text x="452" y="424" class="t-s">Telegram</text>
+          <path class="ln" d="M708 374 V440 H30 V90 H54" marker-end="url(#ar6)"/><text x="66" y="434" class="t-s">&#8805; 90 %: "Battery full", drive 13 cm off the pads</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 8. Operating modes.</b> Security mode and the battery logic run independently: the robot can
+        return to its dock while armed.</figcaption>
+    </figure>
+  </section>
+
+  <!-- 12 -->
+  <section id="power">
+    <span class="secnum">12</span>
+    <h2>Power management and idle mode</h2>
+    <h3>Battery behaviour</h3>
+    <ul>
+      <li><strong>LEDs,</strong> solid at every level, charging or not: red at 25% or below, yellow 26&ndash;50%, green above 50%.</li>
+      <li><strong>Low battery.</strong> At 25% or less, not charging, and idle for 30 s (so motor current sag can't trigger it),
+        the robot says "Low battery, returning to dock" and runs the four docking steps, retrying up to three times before
+        alerting me.</li>
+      <li><strong>Full.</strong> "90%" is a charging-voltage threshold, because the charger lifts the measured voltage:
+        28.75 V held for 60 s while charging (about 28.55 V at rest). Then it says "Battery full" and drives 13 cm forward
+        off the pads.</li>
+      <li><strong>No servo motion while charging.</strong> The lift servos' current pulled the contacts' voltage around and
+        disrupted charging, so the lift is locked on the dock. Security mode is the one exception, because the
+        remote-unlock face check needs the camera up.</li>
+    </ul>
+    <figure><div class="media" data-media="charging-leds" data-kind="photo" data-text="Front panel battery LEDs while docked"></div>
+      <figcaption><b>Battery LEDs</b> on the front panel while charging.</figcaption></figure>
+    <h3>Idle mode</h3>
+    <p>Following the guiding principle, if nothing moves for two minutes, Qwen switches off the camera, gesture tracking
+      and the microphone and leaves only the motion sensor on. Any motion brings everything back. Talking to it, driving,
+      recording, security mode or someone watching the live view keep it awake. The language model stays loaded so the
+      first answer after waking is instant, and the battery manager keeps running so low-battery docking still works.</p>
+    <h3>Estimated running cost</h3>
+    <p>I haven't measured the robot's average draw yet, so this is an estimate from typical figures for its parts: about
+      4&ndash;5 W asleep in security mode, 9&ndash;11 W while actively watching, and short driving bursts. That averages
+      about 6 W at the battery, or about 7.5 W from the wall after charger and battery losses.</p>
+    <div class="eq">\[ E = 7.5\ \text{W} \times 24\ \text{h} = 0.18\ \text{kWh/day}, \qquad 0.18 \times 30.4 \times \$0.1338 \approx \$0.73\ \text{per month} \]</div>
+    <p>At my utility's rate that's under $9 a year for a robot that runs around the clock.</p>
+  </section>
+
+  <!-- 13 -->
+  <section id="integration">
+    <span class="secnum">13</span>
+    <h2>Integration problems</h2>
+    <p>Most of the hard bugs appeared only when subsystems ran together. Each one was found by testing one layer at a time.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td>Wake word stopped responding while the live view was open</td><td>The video stream thread starved the audio thread</td><td>Lowered the stream's thread priority</td></tr>
+        <tr><td>Process crashed with a native error when the alarm and speech overlapped</td><td>Two features shared one global audio stream</td><td>One audio-output module that serializes playback</td></tr>
+        <tr><td>Camera froze during annotated recording</td><td>A threading deadlock in the recording path</td><td>Reworked the locking around the camera</td></tr>
+        <tr><td>Alarm audio crackled</td><td>Pi under-voltage with servos, camera and amplifier all drawing at once</td><td>Servos moved to their own buck converter; amplifier wired directly to the 5 V rail</td></tr>
+        <tr><td>Robot lost Wi-Fi after brownouts</td><td>Power dips truncated the network config file on the SD card to 0 bytes</td><td>Repaired the card from my laptop, then added a boot service that restores the config if it's ever empty</td></tr>
+        <tr><td>Right wheel ignored direction changes</td><td>Its DIR wire was soldered to GPIO5, but the firmware used the pin from the original map</td><td>Matched the firmware to the board</td></tr>
+        <tr><td>A wheel ran away at full speed during rework</td><td>A solder blob fell across the motor controller's pins</td><td>Found and removed it; now I never rework a powered board</td></tr>
+        <tr><td>Docking and the assistant fought over the camera and serial port</td><td>They started as separate programs</td><td>Merged into one process; the tag tracker borrows the camera only while driving</td></tr>
+        <tr><td>Remote unlock while asleep: camera stayed off</td><td>Idle mode turned the camera off without telling security mode</td><td>Idle mode now marks the camera off, so security turns it back on</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note warn"><span class="eyebrow">Known hazard</span>
+      <p>If the ESP32 loses power or resets, the level shifter's pull-ups hold both PWM inputs at 5 V and the motors run at
+        full speed. Until the pull-down fix is fitted, I never shut down the Pi or reflash the ESP32 with the wheels on the ground.</p></div>
+  </section>
+
+  <!-- 14 -->
+  <section id="ai">
+    <span class="secnum">14</span>
+    <h2>How I used AI</h2>
+    <p>I used AI assistants throughout this project, mainly to <strong>speed up debugging</strong>. Typical uses: reading
+      logs and measurements with me to narrow a fault down faster, drafting code for a subsystem I had specified, and
+      checking datasheets and pin maps.</p>
+    <p>The decisions, the hardware and the testing were mine. I set the requirements and made the design calls. I
+      built, wired and soldered the robot, drove every test and judged the results on the real hardware. I also caught
+      the AI's mistakes: one AI-drafted revision of the security specification added a requirement I had never asked for,
+      and several fixes it suggested were wrong until I measured what the robot actually did. AI-generated specifications
+      and code need the same review as anyone else's. The most useful habit I built was writing self-contained handoff
+      documents that restate the constraints and the decisions already made, so settled questions don't get re-argued.</p>
+  </section>
+
+  <!-- 15 -->
+  <section id="status">
+    <span class="secnum">15</span>
+    <h2>Results</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Feature</th><th>Status</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Wake word, speech, local LLM, voice</td><td><span class="pill ok">Working</span></td><td>Fully offline</td></tr>
+        <tr><td>Voice commands</td><td><span class="pill ok">Working</span></td><td>Camera, flashlight, lift, motion, scene description, security, alarm</td></tr>
+        <tr><td>Hand gestures (4)</td><td><span class="pill ok">Working</span></td><td>Need light</td></tr>
+        <tr><td>Owner face recognition</td><td><span class="pill ok">Working</span></td><td>Enrolled per lighting condition</td></tr>
+        <tr><td>Object and person detection</td><td><span class="pill ok">Working</span></td><td>YOLO26n on NCNN</td></tr>
+        <tr><td>Security mode, alarm, Telegram alerts</td><td><span class="pill ok">Working</span></td><td>Tested end to end with the smart-home system</td></tr>
+        <tr><td>Closed-loop drive and odometry</td><td><span class="pill ok">Working</span></td><td>6&ndash;130 mm/s</td></tr>
+        <tr><td>Docking and recharging</td><td><span class="pill ok">Working</span></td><td>Final position at the pads is the weak point (section 9)</td></tr>
+        <tr><td>Idle mode</td><td><span class="pill ok">Working</span></td><td>Part of the single boot-time service</td></tr>
+        <tr><td>Low-battery return to dock</td><td><span class="pill part">Testing</span></td><td>Built on the tested docking steps; full low-battery trial pending</td></tr>
+        <tr><td>Room map / lost-tag search</td><td><span class="pill part">Experimental</span></td><td>Map good for searching, not for path planning</td></tr>
+        <tr><td>Scheduled patrol, e-mail alerts, OCR, door detection</td><td><span class="pill no">Not built</span></td><td>Considered; dropped in favour of docking and Telegram alerts</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Open questions from the planning stage, resolved:</strong> the charger is a 7-cell (29.7 V open-circuit) unit
+      that matches the pack; the INA226 charging-current sign was confirmed on the robot; with everything loaded the Pi has
+      about 1.7 GB of RAM to spare. The cause of the first ZS-X11H's stall is still unknown; the working controller made it
+      moot. Gestures still don't work in the dark.</p>
+  </section>
+
+  <!-- 16 -->
+  <section id="future">
+    <span class="secnum">16</span>
+    <h2>Future improvements</h2>
+    <h3>Safety first</h3>
+    <ul>
+      <li><strong>Fuses.</strong> A main fuse right after the battery and a fuse on the INA226 charging branch. Neither is
+        fitted yet. Fuses belong on the supply side, never in the ground lead.</li>
+      <li><strong>Protect the Pi's 5 V.</strong> A 3 A resettable PTC fuse and a 5 V TVS diode, because header power bypasses
+        the Pi's own input protection.</li>
+      <li><strong>10 k&Omega; pull-downs</strong> on both PWM lines (or a controller enable line), so the motors stop when the
+        ESP32 isn't driving them. This fixes the known hazard in section 13.</li>
+      <li><strong>An emergency-stop switch</strong> in the motor supply.</li>
+    </ul>
+    <h3>Sensing and navigation</h3>
+    <ul>
+      <li><strong>A gyro (IMU)</strong> such as a BNO085 for heading that doesn't drift with wheel slip. This is the single
+        change that would most improve the map, the turns and the docking.</li>
+      <li><strong>A smaller shunt</strong> (0.01 &Omega;) on the INA226 to measure the real charging current instead of saturating.</li>
+      <li><strong>A 2D lidar</strong> for a navigation-grade map.</li>
+      <li><strong>A dock funnel or wider pads</strong>, so a few millimetres of error still lands on the contacts.</li>
+    </ul>
+    <h3>Other</h3>
+    <ul>
+      <li>A fan on the Pi's heatsink: with vision running it reaches the low 80s &deg;C and briefly throttles.</li>
+      <li>Measure real power draw, and the docking success rate over a long series of runs.</li>
+      <li>Scheduled patrol routes, once the map is trustworthy.</li>
+    </ul>
+  </section>
+
+  <!-- 17 -->
+  <section id="bom">
+    <span class="secnum">17</span>
+    <h2>Bill of materials</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Part</th><th>Source</th><th class="num">Cost</th></tr></thead>
+      <tbody>
+        <tr><td>Used hoverboard (hub motors, 25.2 V battery, charger)</td><td>eBay</td><td class="num">$25</td></tr>
+        <tr><td>Logitech C920 webcam</td><td>Facebook Marketplace</td><td class="num">$15</td></tr>
+        <tr><td>2&times; ZS-X11H BLDC motor controllers</td><td>Online</td><td class="num">$25</td></tr>
+        <tr><td>Raspberry Pi 4 (4 GB)</td><td>Hand-me-down from my brother</td><td class="num">$0</td></tr>
+        <tr><td>ESP32, MAX98357A + speaker, PIR, INA226, IR modules, MG996R servos, level shifter, buck converters, LEDs, resistors, perfboard</td><td>Parts I already owned, or a few dollars each</td><td class="num">small</td></tr>
+        <tr><td>PETG filament, spring contacts, plastic plate</td><td>Owned / hardware store</td><td class="num">small</td></tr>
+      </tbody>
+      <tfoot><tr><td><strong>Major parts</strong></td><td></td><td class="num"><strong>$65</strong></td></tr></tfoot>
+    </table></div>
+  </section>
+
+  <!-- 18 -->
+  <section id="lessons">
+    <span class="secnum">18</span>
+    <h2>What I learned</h2>
+    <ul>
+      <li><strong>Resource-aware design works.</strong> Cheap things always on, heavy things on demand, made an offline voice
+        and vision robot fit on a 4 GB board.</li>
+      <li><strong>Measure before tuning.</strong> The gesture overlay, the logic analyzer and the docking log each turned
+        guessing into measuring.</li>
+      <li><strong>Change the problem when tuning stalls.</strong> A new gesture vocabulary beat a fifth threshold; a second
+        tag beat clever single-tag logic; calibrating from my own manual docks beat the geometry.</li>
+      <li><strong>Negative results are results.</strong> The hoverboard replay and the mapping drift each pointed to the
+        right next decision.</li>
+      <li><strong>Electrical decisions come from failure modes, not ratings:</strong> fuse placement, strapping pins, level
+        shifter pull-ups and shunt range all bit me or nearly did.</li>
+      <li><strong>Integration is its own engineering problem.</strong> One owner per shared resource fixed a whole class of bugs at once.</li>
+    </ul>
+    <p class="back-top"><a href="#top">Back to top &uarr;</a></p>
+  </section>
+</main>
+
+<aside class="toc" data-open="false" aria-label="Table of contents">
+  <button class="toc-toggle" type="button" aria-expanded="false">Contents <span aria-hidden="true">&#9662;</span></button>
+  <h2>Contents</h2>
+  <nav>
+    <ol>
+      <li><a href="#goals"><span class="n">01</span>Goals and constraints</a></li>
+      <li><a href="#build"><span class="n">02</span>Design and build</a></li>
+      <li><a href="#architecture"><span class="n">03</span>Architecture</a></li>
+      <li><a href="#voice"><span class="n">04</span>Voice assistant</a></li>
+      <li><a href="#vision"><span class="n">05</span>Vision</a></li>
+      <li><a href="#security"><span class="n">06</span>Security mode</a></li>
+      <li><a href="#drive"><span class="n">07</span>Drivetrain and odometry</a></li>
+      <li><a href="#electrical"><span class="n">08</span>Electrical design</a></li>
+      <li><a href="#docking"><span class="n">09</span>Docking</a></li>
+      <li><a href="#mapping"><span class="n">10</span>Mapping and lost-tag search</a></li>
+      <li><a href="#modes"><span class="n">11</span>Operating modes</a></li>
+      <li><a href="#power"><span class="n">12</span>Power and idle mode</a></li>
+      <li><a href="#integration"><span class="n">13</span>Integration problems</a></li>
+      <li><a href="#ai"><span class="n">14</span>How I used AI</a></li>
+      <li><a href="#status"><span class="n">15</span>Results</a></li>
+      <li><a href="#future"><span class="n">16</span>Future improvements</a></li>
+      <li><a href="#bom"><span class="n">17</span>Bill of materials</a></li>
+      <li><a href="#lessons"><span class="n">18</span>What I learned</a></li>
+    </ol>
+  </nav>
+</aside>
+</div>
+
+<footer class="site-foot">
+  <span>&copy; 2026 Hugo Richmond &middot; Text and photos all rights reserved; source code MIT-licensed</span>
+  <span><a href="../">All projects</a></span>
+</footer>
+<script src="media/manifest.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hugo Richmond</title>
+<meta name="description" content="Hugo Richmond - computer engineering. Robotics, embedded systems and on-device AI projects.">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<header class="site-head">
+  <a class="name" href="./">Hugo Richmond</a>
+  <nav aria-label="Site">
+    <a href="./" aria-current="page">Projects</a>
+    <a href="qwen/">Project Qwen</a>
+  </nav>
+</header>
+
+<main class="home">
+  <section class="intro">
+    <span class="eyebrow">Computer Engineering</span>
+    <h1>Hugo Richmond</h1>
+    <p>I build robots and embedded systems from the hardware up: salvaged motors, hand-soldered boards,
+       3D-printed bodies, and the firmware and on-device AI that tie them together.</p>
+  </section>
+
+  <div class="projects">
+    <a class="card" href="qwen/">
+      <div class="shot"><img src="qwen/media/hero-robot.jpg" alt="Qwen, a 3D-printed home robot with a round camera head on a scissor lift"></div>
+      <div class="body">
+        <span class="eyebrow">Jul - Oct 2026</span>
+        <h2>Project Qwen</h2>
+        <p>An offline home-security and assistant robot built on salvaged hoverboard motors. It answers questions,
+           follows voice and hand-gesture commands, recognizes its owner, responds to intruders, and docks itself to recharge.</p>
+        <div class="tags"><span class="tag">Raspberry Pi 4</span><span class="tag">ESP32</span><span class="tag">Computer vision</span>
+          <span class="tag">Local LLM</span><span class="tag">AprilTag docking</span><span class="tag">Fusion 360</span></div>
+      </div>
+    </a>
+    <div class="card soon" aria-label="Smart-home system, write-up coming soon">
+      <div class="shot"><span>Write-up coming soon</span></div>
+      <div class="body">
+        <span class="eyebrow">Earlier project</span>
+        <h2>ESP32 smart-home system</h2>
+        <p>A door lock, keypad and light switches on ESP32 boards, linked over ESP-NOW to a central hub.
+           Project Qwen plugs into it for remote unlock and lighting.</p>
+        <div class="tags"><span class="tag">ESP32-S3</span><span class="tag">ESP-NOW</span><span class="tag">Embedded C++</span></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer class="site-foot">
+  <span>&copy; 2026 Hugo Richmond</span>
+  <span>Built by hand, hosted on GitHub Pages</span>
+</footer>
+</body>
+</html>
