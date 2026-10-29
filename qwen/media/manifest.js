@@ -6,8 +6,8 @@
   Slots without an entry show a neat "to come" panel.
 */
 window.QWEN_MEDIA = {
-  // the full build video at the top of the page - paste the YouTube video ID when it's live:
-  // "youtube-main": { embed: "https://www.youtube-nocookie.com/embed/VIDEO_ID" },
+  // the full build video at the top of the page
+  "youtube-main": { embed: "https://www.youtube-nocookie.com/embed/jL8Xb0To44A" },
 
   "hero-robot":             { src: "media/hero-robot.jpg", alt: "Qwen, a black-and-white 3D-printed robot with a round camera head on a scissor lift, in front of two AprilTags" },
   "sketch-original":        { src: "media/sketch-original.jpg", alt: "Hand-drawn concept sketches of the robot" },
