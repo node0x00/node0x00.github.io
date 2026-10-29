@@ -250,3 +250,5 @@ pre[class*="language-"], pre { background: #10161a !important; border: 1px solid
   margin: 0 0 1.2rem; max-width: 640px; font-size: .78rem !important; }
 code[class*="language-"], pre[class*="language-"] { font-family: var(--mono) !important; text-shadow: none !important; }
 :not(pre) > code { white-space: nowrap; }
+.article figure.sm .media { aspect-ratio: 4 / 3; }
+.article figure.sm .media img { height: 100%; object-fit: cover; }

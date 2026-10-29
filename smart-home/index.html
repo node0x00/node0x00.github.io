@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ESP32 Smart Home</title>
+<meta name="description" content="A DIY smart home on ESP32 boards talking over ESP-NOW: servo light switches, a servo door lock and a keypad with a countdown alarm, controlled from a phone.">
+<meta name="author" content="Hugo Richmond">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<link rel="stylesheet" href="../assets/style.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-c.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-cpp.min.js"></script>
+</head>
+<body>
+<header class="site-head">
+  <a class="name" href="../">Hugo Richmond</a>
+  <nav aria-label="Site">
+    <a href="../">Projects</a>
+    <a href="../qwen/">Project Qwen</a>
+    <a href="./" aria-current="page">Smart Home</a>
+    <a href="https://github.com/node0x00/esp32-smart-home">Source code</a>
+  </nav>
+</header>
+
+<div class="paper">
+<main class="article" id="top">
+
+  <div class="title-block">
+    <span class="eyebrow">Project write-up</span>
+    <h1>ESP32 Smart Home</h1>
+    <p class="sub">Servo light switches, a servo door lock and a keypad, five ESP32 boards talking over ESP-NOW and
+      controlled from my phone. No cloud, no smart bulbs.</p>
+    <div class="byline">
+      <span><strong>Hugo Richmond</strong> &middot; Computer Engineering</span>
+      <span>Early 2026 &middot; the project before Project Qwen</span>
+    </div>
+    <figure class="wide">
+      <div class="media" data-media="youtube" data-kind="video" data-text="The 3-minute project video"></div>
+      <figcaption><b>The project in 3 minutes:</b> planning, printing, wiring and the whole system working.</figcaption>
+    </figure>
+    <div class="facts">
+      <div><b>5 ESP32s</b><span>one hub, four nodes</span></div>
+      <div><b>ESP-NOW</b><span>direct radio packets, no router</span></div>
+      <div><b>2 bytes</b><span>per command: device + action</span></div>
+      <div><b>3 min</b><span>to enter the code after a remote unlock</span></div>
+    </div>
+  </div>
+
+  <section id="overview">
+    <span class="secnum">01</span>
+    <h2>What it does</h2>
+    <p>I wanted to control my apartment's lights and front door from my phone without replacing anything. Instead of
+      smart bulbs and a smart lock, small servos press the existing light switches and turn the existing deadbolt.</p>
+    <ul>
+      <li><strong>Phone control:</strong> a web page with on/off buttons for the bed light and the kitchen light, and
+        unlock/lock for the door.</li>
+      <li><strong>Remote unlock:</strong> one button unlocks the door for someone, turns both lights on and starts a
+        3-minute countdown on the keypad. If the right code isn't entered in time, the buzzer sounds.</li>
+      <li><strong>Keypad by the door:</strong> <kbd>D</kbd> unlocks when leaving and re-locks 10 seconds later,
+        <kbd>B</kbd> and <kbd>C</kbd> toggle the lights, and during a countdown it takes the code.</li>
+    </ul>
+    <div class="fig-row">
+      <figure><div class="media" data-media="full-test" data-kind="photo"></div>
+        <figcaption><b>Everything on the bench:</b> the light-switch servos, keypad, LCD and the control page.</figcaption></figure>
+      <figure><div class="media" data-media="phone-app" data-kind="photo"></div>
+        <figcaption><b>The phone control page</b> next to a mounted switch.</figcaption></figure>
+    </div>
+  </section>
+
+  <section id="architecture">
+    <span class="secnum">02</span>
+    <h2>How it works</h2>
+    <p>I planned it on paper first: one <strong>hub</strong> that speaks both Wi-Fi and ESP-NOW, and four
+      <strong>nodes</strong> that are "dumb actuators". The hub is a translator: HTTP from the phone comes in, ESP-NOW
+      packets go out. ESP-NOW sends raw packets between ESP32 boards by MAC address, with no router and no IP
+      addresses involved, so a command reaches a servo almost instantly.</p>
+    <figure class="wide">
+      <div class="diagram">
+        <svg viewBox="0 0 820 330" role="img" aria-labelledby="sh-arch-t">
+          <title id="sh-arch-t">The phone and Project Qwen talk HTTP to the ESP32-S3 hub, which sends ESP-NOW packets to two light-switch nodes, the door-lock node and the keypad node</title>
+          <defs><marker id="sha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8a9aa3"/></marker></defs>
+          <rect class="bx" x="20" y="60" width="150" height="56" rx="9"/><text x="34" y="84" class="t-b">Phone</text><text x="34" y="102" class="t-s">control web page</text>
+          <rect class="bx bx-pi" x="20" y="200" width="150" height="56" rx="9"/><text x="34" y="224" class="t-b">Project Qwen</text><text x="34" y="242" class="t-s">robot, joined later</text>
+          <path class="ln-acc" d="M170 88 H280" marker-end="url(#sha)"/><text x="196" y="80" class="t-s">HTTP / Wi-Fi</text>
+          <path class="ln-acc" d="M170 228 H226 V140 H280" marker-end="url(#sha)" marker-start="url(#sha)"/><text x="178" y="272" class="t-s">HTTP: lights, door, events</text>
+          <rect class="bx bx-esp" x="282" y="58" width="200" height="110" rx="10"/>
+          <text x="298" y="84" class="t-b t-blu">Hub &#183; ESP32-S3</text>
+          <text x="298" y="106" class="t-s">Wi-Fi web server</text>
+          <text x="298" y="124" class="t-s">HTTP in &#8594; ESP-NOW out</text>
+          <text x="298" y="142" class="t-s">keypad event log for Qwen</text>
+          <path class="ln" d="M482 80 H600" marker-end="url(#sha)"/>
+          <path class="ln" d="M540 80 V140 H600" marker-end="url(#sha)"/>
+          <path class="ln" d="M540 140 V200 H600" marker-end="url(#sha)"/>
+          <path class="ln-amb" d="M540 200 V262 H600" marker-end="url(#sha)" marker-start="url(#sha)"/>
+          <text x="492" y="72" class="t-s">ESP-NOW</text>
+          <rect class="bx" x="602" y="58" width="200" height="44" rx="8"/><text x="614" y="78" class="t-b">Node 1 &#183; bed light</text><text x="614" y="94" class="t-s">ESP32-C3 + servo</text>
+          <rect class="bx" x="602" y="118" width="200" height="44" rx="8"/><text x="614" y="138" class="t-b">Node 2 &#183; kitchen light</text><text x="614" y="154" class="t-s">ESP32-C3 + servo</text>
+          <rect class="bx" x="602" y="178" width="200" height="44" rx="8"/><text x="614" y="198" class="t-b">Node 3 &#183; door lock</text><text x="614" y="214" class="t-s">ESP32-C3 + MG996R</text>
+          <rect class="bx bx-warn" x="602" y="240" width="200" height="56" rx="8"/><text x="614" y="260" class="t-b">Node 4 &#183; keypad</text><text x="614" y="276" class="t-s">ESP32 + 4&#215;4 keypad</text><text x="614" y="290" class="t-s">16&#215;2 LCD + buzzer</text>
+          <text x="420" y="318" class="t-s t-amb">the keypad also talks back: events to the hub, commands to the other nodes</text>
+        </svg>
+      </div>
+      <figcaption><b>Figure 1. System layout.</b> Every command is the same tiny packet; the node checks the device number and moves its servo.</figcaption>
+    </figure>
+    <p>Every command is the same two-byte packet. A node ignores anything not addressed to its device number:</p>
+<pre><code class="language-cpp">typedef struct {
+  uint8_t deviceId;   // 1, 2, 3 = servos, 99 = keypad event
+  uint8_t action;     // 0 = OFF / LOCK, 1 = ON / UNLOCK
+} Command;
+
+if (cmd.deviceId != DEVICE_ID) return;              // not for me
+servo.write(cmd.action == 1 ? ON_POS : OFF_POS);   // e.g. 45 deg</code></pre>
+    <p>Remote unlock is a short sequence on the hub:</p>
+<pre><code class="language-cpp">void s3on() {
+  sendCommand(NODE3_MAC, 3, 1);                   // unlock the door
+  delay(1000);
+  sendCommand(NODE1_MAC, 1, 1);                   // bed light on
+  sendCommand(NODE2_MAC, 2, 1);                   // kitchen light on
+  sendCommand(KEYPAD_MAC, 99, KP_REMOTE_UNLOCK);  // start countdown
+}</code></pre>
+  </section>
+
+  <section id="hardware">
+    <span class="secnum">03</span>
+    <h2>Hardware</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Node</th><th>Board</th><th>Parts</th></tr></thead>
+      <tbody>
+        <tr><td>Hub</td><td>ESP32-S3 DevKit</td><td>Wi-Fi web server and ESP-NOW</td></tr>
+        <tr><td>1 &middot; bed light</td><td>ESP32-C3</td><td>servo on a 3D-printed switch-plate mount</td></tr>
+        <tr><td>2 &middot; kitchen light</td><td>ESP32-C3</td><td>servo on a 3D-printed switch-plate mount</td></tr>
+        <tr><td>3 &middot; door lock</td><td>ESP32-C3</td><td>MG996R servo in a printed mount that grips the deadbolt's thumb-turn</td></tr>
+        <tr><td>4 &middot; keypad</td><td>ESP32 DevKit</td><td>4&times;4 keypad, 16&times;2 I&sup2;C LCD, buzzer, printed enclosure</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="build">
+    <span class="secnum">04</span>
+    <h2>Design and build</h2>
+    <p>I designed the mounts in CAD and 3D-printed them. The door-lock mount is a round
+      base with four prongs that grip the deadbolt's thumb-turn, so the servo turns the existing lock. The light
+      switches get a plate that holds a small servo right next to the switch lever.</p>
+    <div class="fig-row">
+      <figure><div class="media" data-media="planning" data-kind="photo"></div>
+        <figcaption><b>The plan:</b> components, boards and the "hub as translator" idea.</figcaption></figure>
+      <figure><div class="media" data-media="cad-mount" data-kind="photo"></div>
+        <figcaption><b>Door-lock mount</b> in Fusion 360.</figcaption></figure>
+      <figure><div class="media" data-media="printing" data-kind="photo"></div>
+        <figcaption><b>Printing</b> the mount.</figcaption></figure>
+    </div>
+    <div class="fig-row">
+      <figure><div class="media" data-media="door-lock-mount" data-kind="photo"></div>
+        <figcaption><b>Door lock:</b> MG996R in the printed mount.</figcaption></figure>
+      <figure><div class="media" data-media="switch-mount" data-kind="photo"></div>
+        <figcaption><b>Light switch:</b> servo on the switch plate.</figcaption></figure>
+      <figure><div class="media" data-media="keypad-enclosure" data-kind="photo"></div>
+        <figcaption><b>Keypad</b> and LCD in their enclosure.</figcaption></figure>
+    </div>
+    <figure class="sm"><div class="media" data-media="esp32-node" data-kind="photo"></div>
+      <figcaption><b>An ESP32-C3 node</b> being wired up.</figcaption></figure>
+  </section>
+
+  <section id="reliability">
+    <span class="secnum">05</span>
+    <h2>Making it reliable</h2>
+    <p>When I later connected the keypad to my robot, its events sometimes never reached the hub. Two causes, two fixes:</p>
+    <ul>
+      <li><strong>Lost broadcasts.</strong> ESP-NOW broadcasts aren't acknowledged, so one dropped packet meant a
+        missed event. Keypad events now go to the hub as unicast, which the radio acknowledges and retries, and each
+        event is sent three times with a sequence number so the hub can drop the duplicates.</li>
+      <li><strong>A sleepy hub.</strong> With Wi-Fi power saving on (the default), the hub's radio dozed between
+        beacons and missed packets that arrived meanwhile. Turning it off fixed it:
+        <code>WiFi.setSleep(false)</code>.</li>
+    </ul>
+<pre><code class="language-cpp">void sendHubEvent(uint8_t event) {
+  HubEvent ev = { 99, event, ++hubEventSeq };     // one seq for all copies
+  for (int i = 0; i &lt; HUB_EVENT_REPEATS; i++) {   // 3 acknowledged unicasts
+    esp_now_send(HUB_MAC, (uint8_t*)&amp;ev, sizeof(ev));
+    delay(20);
+  }
+}</code></pre>
+    <p>One more gotcha: ESP-NOW only works when every board is on the same Wi-Fi channel as the hub's router, since
+      the hub has to stay on that channel to serve the web page.</p>
+  </section>
+
+  <section id="qwen">
+    <span class="secnum">06</span>
+    <h2>Working with Project Qwen</h2>
+    <p>When I built my home robot, <a href="../qwen/">Project Qwen</a>, I connected it to this system instead of starting
+      over. The hub gained a few HTTP routes for the robot (door and lights on their own, cancelling the countdown) and a
+      small event log the robot polls. Now pressing <kbd>D</kbd> on the way out arms Qwen's security mode, Qwen turns the
+      lights on when it sees an intruder, and after a remote unlock it locks the door again once it recognizes my face.</p>
+  </section>
+
+  <section id="next">
+    <span class="secnum">07</span>
+    <h2>What I'd improve</h2>
+    <ul>
+      <li><strong>Security:</strong> the control page has no login and the ESP-NOW packets aren't encrypted. It only
+        works on my home network, but both are the next things to add.</li>
+      <li><strong>Feedback:</strong> the nodes don't report back, so the page can't show whether a light is actually on.</li>
+    </ul>
+    <p class="back-top"><a href="#top">Back to top &uarr;</a></p>
+  </section>
+</main>
+
+<aside class="toc" data-open="false" aria-label="Table of contents">
+  <button class="toc-toggle" type="button" aria-expanded="false">Contents <span aria-hidden="true">&#9662;</span></button>
+  <h2>Contents</h2>
+  <nav>
+    <ol>
+      <li><a href="#overview"><span class="n">01</span>What it does</a></li>
+      <li><a href="#architecture"><span class="n">02</span>How it works</a></li>
+      <li><a href="#hardware"><span class="n">03</span>Hardware</a></li>
+      <li><a href="#build"><span class="n">04</span>Design and build</a></li>
+      <li><a href="#reliability"><span class="n">05</span>Making it reliable</a></li>
+      <li><a href="#qwen"><span class="n">06</span>Working with Qwen</a></li>
+      <li><a href="#next"><span class="n">07</span>What I'd improve</a></li>
+    </ol>
+  </nav>
+</aside>
+</div>
+
+<footer class="site-foot">
+  <span>&copy; 2026 Hugo Richmond &middot; Text and photos all rights reserved; source code MIT-licensed</span>
+  <span><a href="../">All projects</a></span>
+</footer>
+<script src="media/manifest.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>
